@@ -86,3 +86,6 @@ dependencies {
     // OneSignal SDK v5
     implementation 'com.onesignal:OneSignal:[5.0.0, 5.99.99]'
 }
+
+// Google Services plugin (required for FCM/OneSignal)
+apply plugin: 'com.google.gms.google-services'
