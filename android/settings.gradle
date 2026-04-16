@@ -1,5 +1,19 @@
-pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
-plugins { id("com.facebook.react.settings") }
+pluginManagement {
+    includeBuild("../node_modules/@react-native/gradle-plugin")
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "org.gradle.toolchains.foojay-resolver-convention") {
+                useVersion("1.0.0")
+            }
+        }
+    }
+}
+
+plugins {
+    id("com.facebook.react.settings")
+    id("org.gradle.toolchains.foojay-resolver-convention")
+}
+
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'cheapeatapp'
 include ':app'
