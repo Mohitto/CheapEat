@@ -11,6 +11,12 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="${usesCleartextTraffic}"
       android:supportsRtl="true">
+
+      <!-- OneSignal NotificationServiceExtension -->
+      <meta-data
+          android:name="com.onesignal.NotificationServiceExtension"
+          android:value="com.onesignal.OneSignalNotificationServiceExtension" />
+
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
