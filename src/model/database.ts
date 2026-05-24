@@ -1,23 +1,49 @@
 import { Database } from '@nozbe/watermelondb';
 import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
 
-import schema from './schema';
-import { Sklep } from './Sklep';
-import { ProduktSklepu } from './ProduktSklepu';
+import { schema } from '../db/schema';
+import {
+  Store,
+  Ingredient,
+  StoreProduct,
+  Price,
+  IngredientMapping,
+  RecipeTag,
+  Flyer,
+  FlyerItem,
+  Receipt,
+  ReceiptItem,
+  Recipe,
+  RecipeIngredient,
+  UserIngredientPreference,
+  UserFavoriteRecipe,
+} from './index';
 
 const adapter = new SQLiteAdapter({
   schema,
-  // (Optional) Database name. Default is 'watermelon'
   dbName: 'CheapEat',
-  // (Optional) Syntax highlighter support
   jsi: false,
   onSetUpError: error => {
-    // Database failed to load -- i.e. low disk space.
     console.error('Database setup error:', error);
   },
 });
 
 export const database = new Database({
   adapter,
-  modelClasses: [Sklep, ProduktSklepu],
+  modelClasses: [
+    Store,
+    Ingredient,
+    StoreProduct,
+    Price,
+    IngredientMapping,
+    RecipeTag,
+    Flyer,
+    FlyerItem,
+    Receipt,
+    ReceiptItem,
+    Recipe,
+    RecipeIngredient,
+    UserIngredientPreference,
+    UserFavoriteRecipe,
+  ],
 });
