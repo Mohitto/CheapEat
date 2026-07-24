@@ -1,0 +1,40 @@
+name: Scrape Flyers
+
+on:
+  schedule:
+    # Biedronka zmienia gazetkę w środę rano — odpalamy w środę o 7:00 UTC
+    - cron: '0 7 * * 3'
+  workflow_dispatch:  # ręczne odpalenie z GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scrapers
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scrapers/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run all scrapers
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python run_all.py
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Scraper failed at $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "Check Supabase error_logs table for details" >> $GITHUB_STEP_SUMMARY
