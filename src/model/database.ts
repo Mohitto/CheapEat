@@ -2,6 +2,7 @@ import { Database } from '@nozbe/watermelondb';
 import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
 
 import { schema } from '../db/schema';
+import { migrations } from '../db/migrations';
 import {
   Store,
   Ingredient,
@@ -21,6 +22,7 @@ import {
 
 const adapter = new SQLiteAdapter({
   schema,
+  migrations,
   dbName: 'CheapEat',
   jsi: false,
   onSetUpError: error => {
@@ -47,3 +49,5 @@ export const database = new Database({
     UserFavoriteRecipe,
   ],
 });
+
+export default database;
