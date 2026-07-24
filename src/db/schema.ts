@@ -1,7 +1,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 2,
+  version: 3,
   tables: [
 
     // ── READ-ONLY ──────────────────────────────────────────────────
@@ -20,7 +20,7 @@ export const schema = appSchema({
       name: 'ingredients',
       columns: [
         { name: 'remote_id',        type: 'string' },
-        { name: 'name',             type: 'string', isIndexed: true }, // v2: index dla LIKE search
+        { name: 'name',             type: 'string', isIndexed: true },
         { name: 'protein_per_100g', type: 'number', isOptional: true },
         { name: 'kcal_per_100g',    type: 'number', isOptional: true },
         { name: 'updated_at',       type: 'number' },
@@ -56,7 +56,7 @@ export const schema = appSchema({
         { name: 'ingredient_id',     type: 'string', isIndexed: true },
         { name: 'store_product_id',  type: 'string', isIndexed: true },
         { name: 'conversion_factor', type: 'number' },
-        { name: 'priority',          type: 'number', isIndexed: true }, // v2: wymagane przez Q.sortBy
+        { name: 'priority',          type: 'number', isIndexed: true },
         { name: 'updated_at',        type: 'number' },
       ],
     }),
@@ -107,19 +107,24 @@ export const schema = appSchema({
         { name: 'updated_at',   type: 'number' },
       ],
     }),
+
+    // v3: receipt_items przepisane pod OCR (raw_name, matched_name, gross_price, confidence)
     tableSchema({
       name: 'receipt_items',
       columns: [
-        { name: 'remote_id',   type: 'string', isOptional: true },
-        { name: 'receipt_id',  type: 'string', isIndexed: true },
-        { name: 'store_name',  type: 'string' },
-        { name: 'quantity',    type: 'number' },
-        { name: 'unit_price',  type: 'number', isOptional: true },
-        { name: 'total_price', type: 'number' },
-        { name: 'unit',        type: 'string', isOptional: true },
-        { name: 'updated_at',  type: 'number' },
+        { name: 'remote_id',        type: 'string', isOptional: true },
+        { name: 'receipt_id',       type: 'string', isIndexed: true },
+        { name: 'store_product_id', type: 'string', isOptional: true },
+        { name: 'raw_name',         type: 'string' },
+        { name: 'matched_name',     type: 'string', isOptional: true },
+        { name: 'gross_price',      type: 'number', isOptional: true },
+        { name: 'quantity',         type: 'number' },
+        { name: 'unit',             type: 'string', isOptional: true },
+        { name: 'confidence',       type: 'number', isOptional: true },
+        { name: 'updated_at',       type: 'number' },
       ],
     }),
+
     tableSchema({
       name: 'recipes',
       columns: [

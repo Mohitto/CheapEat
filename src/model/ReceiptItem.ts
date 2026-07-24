@@ -9,14 +9,16 @@ export class ReceiptItem extends Model {
     receipts: { type: 'belongs_to', key: 'receipt_id' },
   } as const;
 
-  @text('remote_id')   remoteId?: string;
-  @text('receipt_id')  receiptId!: string;
-  @text('store_name')  storeName!: string;
-  @field('quantity')   quantity!: number;
-  @field('unit_price') unitPrice?: number;
-  @field('total_price') totalPrice!: number;
-  @text('unit')        unit?: string;
-  @field('updated_at') updatedAt!: number;
+  @text('remote_id')        remoteId?: string;
+  @text('receipt_id')       receiptId!: string;
+  @text('store_product_id') storeProductId?: string;
+  @text('raw_name')         rawName!: string;
+  @text('matched_name')     matchedName?: string;
+  @field('gross_price')     grossPrice?: number;
+  @field('quantity')        quantity!: number;
+  @text('unit')             unit?: string;
+  @field('confidence')      confidence?: number;
+  @field('updated_at')      updatedAt!: number;
 
   @relation('receipts', 'receipt_id') receipt!: Relation<Receipt>;
 }
