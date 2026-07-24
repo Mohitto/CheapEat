@@ -1,10 +1,10 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 1,
+  version: 2,
   tables: [
 
-    // ── READ-ONLY ────────────────────────────────────────────
+    // ── READ-ONLY ──────────────────────────────────────────────────
     tableSchema({
       name: 'stores',
       columns: [
@@ -20,7 +20,7 @@ export const schema = appSchema({
       name: 'ingredients',
       columns: [
         { name: 'remote_id',        type: 'string' },
-        { name: 'name',             type: 'string' },
+        { name: 'name',             type: 'string', isIndexed: true }, // v2: index dla LIKE search
         { name: 'protein_per_100g', type: 'number', isOptional: true },
         { name: 'kcal_per_100g',    type: 'number', isOptional: true },
         { name: 'updated_at',       type: 'number' },
@@ -56,7 +56,7 @@ export const schema = appSchema({
         { name: 'ingredient_id',     type: 'string', isIndexed: true },
         { name: 'store_product_id',  type: 'string', isIndexed: true },
         { name: 'conversion_factor', type: 'number' },
-        { name: 'priority',          type: 'number' },
+        { name: 'priority',          type: 'number', isIndexed: true }, // v2: wymagane przez Q.sortBy
         { name: 'updated_at',        type: 'number' },
       ],
     }),
@@ -93,7 +93,7 @@ export const schema = appSchema({
       ],
     }),
 
-    // ── USER DATA ─────────────────────────────────────────────
+    // ── USER DATA ───────────────────────────────────────────────
     tableSchema({
       name: 'receipts',
       columns: [
