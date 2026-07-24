@@ -1,11 +1,15 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Text } from 'react-native';
 import { FeedScreen } from '../screens/FeedScreen';
-import { PreferencjeScreen } from '../screens/PreferencjeScreen';
-import { ListaZakupówScreen } from '../screens/ListaZakupówScreen';
+import { CartScreen } from '../screens/CartScreen';
+import { ReceiptScreen } from '../screens/ReceiptScreen';
+import { PreferencesScreen } from '../screens/PreferencesScreen';
 import type { TabParamList } from './types';
 
 const Tab = createBottomTabNavigator<TabParamList>();
+
+const icon = (emoji: string) => () => <Text style={{ fontSize: 20 }}>{emoji}</Text>;
 
 export function BottomTabNavigator() {
   return (
@@ -17,21 +21,10 @@ export function BottomTabNavigator() {
         tabBarStyle: { backgroundColor: '#fff', borderTopColor: '#eee' },
       }}
     >
-      <Tab.Screen
-        name="Feed"
-        component={FeedScreen}
-        options={{ title: 'Przepisy', tabBarLabel: 'Przepisy' }}
-      />
-      <Tab.Screen
-        name="ListaZakupów"
-        component={ListaZakupówScreen}
-        options={{ title: 'Lista zakupów', tabBarLabel: 'Zakupy' }}
-      />
-      <Tab.Screen
-        name="Preferencje"
-        component={PreferencjeScreen}
-        options={{ title: 'Preferencje', tabBarLabel: 'Preferencje' }}
-      />
+      <Tab.Screen name="Feed"        component={FeedScreen}       options={{ tabBarLabel: 'Przepisy',   tabBarIcon: icon('🍽') }} />
+      <Tab.Screen name="Cart"        component={CartScreen}       options={{ tabBarLabel: 'Koszyk',     tabBarIcon: icon('🛒') }} />
+      <Tab.Screen name="Receipt"     component={ReceiptScreen}    options={{ tabBarLabel: 'Paragon',    tabBarIcon: icon('🧾') }} />
+      <Tab.Screen name="Preferences" component={PreferencesScreen} options={{ tabBarLabel: 'Preferencje', tabBarIcon: icon('⚙️') }} />
     </Tab.Navigator>
   );
 }

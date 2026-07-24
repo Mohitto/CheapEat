@@ -1,10 +1,11 @@
 export type RootStackParamList = {
   Tabs: undefined;
-  SzczegółyPrzepisu: { recipeId: string };
+  RecipeDetail: { recipeId: string };
 };
 
 export type TabParamList = {
   Feed: undefined;
-  ListaZakupów: undefined;
-  Preferencje: undefined;
+  Cart: undefined;
+  Receipt: undefined;
+  Preferences: undefined;
 };
