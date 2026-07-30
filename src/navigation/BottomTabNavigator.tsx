@@ -3,7 +3,6 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Text } from 'react-native';
 import { FeedScreen } from '../screens/FeedScreen';
 import { CartScreen } from '../screens/CartScreen';
-import { ReceiptScreen } from '../screens/ReceiptScreen';
 import { PreferencesScreen } from '../screens/PreferencesScreen';
 import type { TabParamList } from './types';
 
@@ -21,9 +20,8 @@ export function BottomTabNavigator() {
         tabBarStyle: { backgroundColor: '#fff', borderTopColor: '#eee' },
       }}
     >
-      <Tab.Screen name="Feed"        component={FeedScreen}       options={{ tabBarLabel: 'Przepisy',   tabBarIcon: icon('🍽') }} />
-      <Tab.Screen name="Cart"        component={CartScreen}       options={{ tabBarLabel: 'Koszyk',     tabBarIcon: icon('🛒') }} />
-      <Tab.Screen name="Receipt"     component={ReceiptScreen}    options={{ tabBarLabel: 'Paragon',    tabBarIcon: icon('🧾') }} />
+      <Tab.Screen name="Feed"        component={FeedScreen}        options={{ tabBarLabel: 'Przepisy',    tabBarIcon: icon('🍽') }} />
+      <Tab.Screen name="Cart"        component={CartScreen}        options={{ tabBarLabel: 'Koszyk',      tabBarIcon: icon('🛒') }} />
       <Tab.Screen name="Preferences" component={PreferencesScreen} options={{ tabBarLabel: 'Preferencje', tabBarIcon: icon('⚙️') }} />
     </Tab.Navigator>
   );
