@@ -6,6 +6,5 @@ export type RootStackParamList = {
 export type TabParamList = {
   Feed: undefined;
   Cart: undefined;
-  Receipt: undefined;
   Preferences: undefined;
 };
