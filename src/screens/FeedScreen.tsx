@@ -2,9 +2,14 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList,
   TouchableOpacity, ActivityIndicator, RefreshControl,
-  TextInput, Image, Linking,
+  TextInput, Image,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../navigation/types';
 import { supabase } from '../lib/supabase';
+
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 type RecipeRow = {
   id: string;
@@ -34,6 +39,7 @@ async function fetchRecipes(query: string = ''): Promise<RecipeRow[]> {
 }
 
 export function FeedScreen() {
+  const navigation = useNavigation<Nav>();
   const [recipes, setRecipes]       = useState<RecipeRow[]>([]);
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -88,7 +94,7 @@ export function FeedScreen() {
           renderItem={({ item }) => (
             <TouchableOpacity
               style={s.card}
-              onPress={() => item.source_url && Linking.openURL(item.source_url)}
+              onPress={() => navigation.navigate('RecipeDetail', { recipeId: item.id })}
               activeOpacity={0.75}
             >
               {item.image_url ? (
