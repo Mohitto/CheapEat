@@ -1,5 +1,6 @@
 import { synchronize } from '@nozbe/watermelondb/sync';
 import database from '../model/database';
+import { schema } from '../db/schema';
 import { supabase } from './supabase';
 
 const READ_ONLY_TABLES = [
@@ -18,15 +19,28 @@ type TableName = typeof ALL_TABLES[number];
 const toISO = (ts: number | null) =>
   ts ? new Date(ts).toISOString() : new Date(0).toISOString();
 
+/**
+ * Mapuje wiersz z Supabase (`select('*')`) na rekord WatermelonDB.
+ *
+ * Przepuszcza tylko kolumny faktycznie zdefiniowane w lokalnym schemacie
+ * danej tabeli — zdalna tabela w Supabase może mieć więcej kolumn niż jej
+ * lokalne, offline'owe lustro (np. `recipes` ma image_url/category/source/
+ * scraped_at, których WatermelonDB w ogóle nie potrzebuje). Bez tego
+ * filtrowania `synchronize()` wywali się przy próbie zapisania nieznanej
+ * kolumny do lokalnej bazy SQLite.
+ */
 function mapRecord(table: TableName, row: Record<string, unknown>) {
   const base = {
     id: row.id as string,
     remote_id: row.id as string,
     updated_at: new Date(row.updated_at as string).getTime(),
   };
-  const rest = { ...(row as Record<string, unknown>) };
-  delete rest.id;
-  delete rest.created_at;
+  const knownColumns = schema.tables[table]?.columns ?? {};
+  const rest: Record<string, unknown> = {};
+  for (const column of Object.keys(knownColumns)) {
+    if (column === 'remote_id' || column === 'updated_at') continue; // już w base
+    if (column in row) rest[column] = row[column];
+  }
   return { ...base, ...rest };
 }
 

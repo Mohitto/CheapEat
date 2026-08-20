@@ -66,6 +66,11 @@ yarn-error.log
 # testing
 /coverage
 
+# Python
+__pycache__/
+*.pyc
+scrapers/.env
+
 # Yarn
 .yarn/*
 !.yarn/patches
