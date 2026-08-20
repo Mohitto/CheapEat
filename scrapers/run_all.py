@@ -4,11 +4,12 @@ import json
 from datetime import datetime
 
 from biedronka.scraper import BiedronkaScraper
-# from lidl.scraper import LidlScraper      # odkomentuj gdy gotowy
+from lidl.scraper import LidlScraper
 # from aldi.scraper import AldiScraper      # odkomentuj gdy gotowy
 
 SCRAPERS = [
     BiedronkaScraper,
+    LidlScraper,
 ]
 
 
