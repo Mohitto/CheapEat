@@ -7,7 +7,6 @@ export class Store extends Model {
   static associations = {
     store_products: { type: 'has_many', foreignKey: 'store_id' },
     flyers:         { type: 'has_many', foreignKey: 'store_id' },
-    receipts:       { type: 'has_many', foreignKey: 'store_id' },
   } as const;
 
   @text('remote_id')   remoteId!: string;

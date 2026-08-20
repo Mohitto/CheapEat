@@ -8,7 +8,7 @@ const READ_ONLY_TABLES = [
 ] as const;
 
 const USER_TABLES = [
-  'receipts', 'receipt_items', 'recipes', 'recipe_ingredients',
+  'recipes', 'recipe_ingredients',
   'user_ingredient_preferences', 'user_favorite_recipes',
 ] as const;
 
@@ -40,7 +40,7 @@ async function pullChanges(lastPulledAt: number | null) {
     let query = supabase.from(table).select('*').gt('updated_at', since);
 
     if ((USER_TABLES as readonly string[]).includes(table) && userId) {
-      if (['receipts', 'receipt_items', 'user_ingredient_preferences', 'user_favorite_recipes'].includes(table)) {
+      if (['user_ingredient_preferences', 'user_favorite_recipes'].includes(table)) {
         query = query.eq('user_id', userId);
       }
       if (table === 'recipes') {
