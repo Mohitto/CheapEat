@@ -6,7 +6,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { buildCartForRecipes, type CartResult, type CartIngredientLine } from '../services/cartService';
 import { getPublicRecipes } from '../services/recipeService';
-import Recipe from '../model/Recipe';
+import { Recipe } from '../model/Recipe';
 
 export function CartScreen() {
   const [cart, setCart]         = useState<CartResult | null>(null);

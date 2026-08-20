@@ -55,7 +55,7 @@ export function ReceiptScreen() {
 
   const openCamera = () =>
     launchCamera(
-      { mediaType: 'photo', quality: 0.85, saveToPhotos: false },
+      { mediaType: 'photo', quality: 0.8, saveToPhotos: false },
       ({ assets, didCancel, errorMessage }) => {
         if (didCancel || !assets?.[0]) return;
         if (errorMessage) { Alert.alert('Błąd aparatu', errorMessage); return; }
@@ -65,7 +65,7 @@ export function ReceiptScreen() {
 
   const openGallery = () =>
     launchImageLibrary(
-      { mediaType: 'photo', quality: 0.85 },
+      { mediaType: 'photo', quality: 0.8 },
       ({ assets, didCancel, errorMessage }) => {
         if (didCancel || !assets?.[0]) return;
         if (errorMessage) { Alert.alert('Błąd galerii', errorMessage); return; }

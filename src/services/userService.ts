@@ -1,8 +1,9 @@
 import { supabase } from '../lib/supabase';
 import database from '../model/database';
 import { Q } from '@nozbe/watermelondb';
-import UserIngredientPreference from '../model/UserIngredientPreference';
-import UserFavoriteRecipe from '../model/UserFavoriteRecipe';
+import { UserIngredientPreference } from '../model/UserIngredientPreference';
+import { UserFavoriteRecipe } from '../model/UserFavoriteRecipe';
+import { Ingredient } from '../model/Ingredient';
 
 // ---------------------------------------------------------------------------
 // Profile
@@ -89,16 +90,18 @@ export async function setIngredientPreference(
       .fetch();
 
     if (existing.length > 0) {
-      await existing[0].update(record => {
-        (record as any).preference = preference;
+      await existing[0].update((record: UserIngredientPreference) => {
+        record.preference = preference;
+        record.updatedAt = Date.now();
       });
     } else {
       await database
         .get<UserIngredientPreference>('user_ingredient_preferences')
-        .create(record => {
-          (record as any).userId = userId;
-          (record as any).ingredientId = ingredientId;
-          (record as any).preference = preference;
+        .create((record: UserIngredientPreference) => {
+          record.userId = userId;
+          record.ingredientId = ingredientId;
+          record.preference = preference;
+          record.updatedAt = Date.now();
         });
     }
   });
@@ -124,6 +127,36 @@ export async function removeIngredientPreference(
       await existing[0].destroyPermanently();
     }
   });
+}
+
+/** Alias używany przez ekran preferencji. */
+export const clearIngredientPreference = removeIngredientPreference;
+
+export type IngredientPreferenceRow = {
+  ingredientId: string;
+  ingredientName: string;
+  preference: PreferenceType | null;
+};
+
+/**
+ * Zwraca wszystkie składniki bazowe wraz z aktualną preferencją użytkownika
+ * (lub `null` jeśli preferencja nie została jeszcze ustawiona).
+ */
+export async function getUserPreferences(
+  userId: string
+): Promise<IngredientPreferenceRow[]> {
+  const [ingredients, prefs] = await Promise.all([
+    database.get<Ingredient>('ingredients').query(Q.sortBy('name', Q.asc)).fetch(),
+    getIngredientPreferences(userId),
+  ]);
+
+  const prefByIngredient = new Map(prefs.map(p => [p.ingredientId, p.preference as PreferenceType]));
+
+  return ingredients.map(ing => ({
+    ingredientId: ing.id,
+    ingredientName: ing.name,
+    preference: prefByIngredient.get(ing.id) ?? null,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -161,9 +194,10 @@ export async function addFavoriteRecipe(
     if (existing.length === 0) {
       await database
         .get<UserFavoriteRecipe>('user_favorite_recipes')
-        .create(record => {
-          (record as any).userId = userId;
-          (record as any).recipeId = recipeId;
+        .create((record: UserFavoriteRecipe) => {
+          record.userId = userId;
+          record.recipeId = recipeId;
+          record.updatedAt = Date.now();
         });
     }
   });

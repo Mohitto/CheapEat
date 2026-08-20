@@ -1,8 +1,8 @@
 import database from '../model/database';
 import { Q } from '@nozbe/watermelondb';
-import Recipe from '../model/Recipe';
-import RecipeIngredient from '../model/RecipeIngredient';
-import { matchProductToIngredient, getIngredientMappings, calculateIngredientCostPer100g } from './ingredientService';
+import { Recipe } from '../model/Recipe';
+import { RecipeIngredient } from '../model/RecipeIngredient';
+import { getIngredientMappings, calculateIngredientCostPer100g } from './ingredientService';
 import { getCurrentPrice } from './priceService';
 
 // ---------------------------------------------------------------------------

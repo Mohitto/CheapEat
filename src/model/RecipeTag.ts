@@ -1,4 +1,4 @@
-import { Model, Query } from '@nozbe/watermelondb';
+import { Model } from '@nozbe/watermelondb';
 import { text, field } from '@nozbe/watermelondb/decorators';
 
 export class RecipeTag extends Model {

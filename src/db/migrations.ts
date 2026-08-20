@@ -1,4 +1,4 @@
-import { schemaMigrations, addColumns, createTable } from '@nozbe/watermelondb/Schema/migrations';
+import { schemaMigrations, addColumns } from '@nozbe/watermelondb/Schema/migrations';
 
 /**
  * WatermelonDB migrations.

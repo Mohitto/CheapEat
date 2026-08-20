@@ -148,7 +148,7 @@ export async function pollReceiptStatus(
     const status = data.ocr_status as ReceiptStatus;
     if (status === 'done' || status === 'error') return status;
 
-    await new Promise(r => setTimeout(r, intervalMs));
+    await new Promise<void>(resolve => setTimeout(resolve, intervalMs));
   }
 
   throw new Error('OCR timeout — paragon nie został przetworzony w czasie 60s');

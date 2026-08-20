@@ -1,6 +1,6 @@
 import database from '../model/database';
 import { Q } from '@nozbe/watermelondb';
-import Price from '../model/Price';
+import { Price } from '../model/Price';
 
 /**
  * Returns the current best price for a given store_product_id.
@@ -28,7 +28,7 @@ export async function getCurrentPrice(
 
   if (receiptPrices.length > 0) {
     const latest = receiptPrices.sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    return latest._raw.gross_price ?? null;
+    return latest.grossPrice ?? null;
   }
 
   // 2. Active flyer price
@@ -42,7 +42,7 @@ export async function getCurrentPrice(
 
   if (flyerPrices.length > 0) {
     const latest = flyerPrices.sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    return latest._raw.gross_price ?? null;
+    return latest.grossPrice ?? null;
   }
 
   // 3. Fallback - any latest price
@@ -52,7 +52,7 @@ export async function getCurrentPrice(
 
   if (allPrices.length > 0) {
     const latest = allPrices.sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    return latest._raw.gross_price ?? null;
+    return latest.grossPrice ?? null;
   }
 
   return null;

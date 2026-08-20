@@ -1,5 +1,5 @@
-import { Model, Query } from '@nozbe/watermelondb';
-import { text, field, children } from '@nozbe/watermelondb/decorators';
+import { Model } from '@nozbe/watermelondb';
+import { text, field } from '@nozbe/watermelondb/decorators';
 
 export class Ingredient extends Model {
   static table = 'ingredients';

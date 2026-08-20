@@ -1,5 +1,5 @@
 import { synchronize } from '@nozbe/watermelondb/sync';
-import { database } from '../db';
+import database from '../model/database';
 import { supabase } from './supabase';
 
 const READ_ONLY_TABLES = [
@@ -24,7 +24,9 @@ function mapRecord(table: TableName, row: Record<string, unknown>) {
     remote_id: row.id as string,
     updated_at: new Date(row.updated_at as string).getTime(),
   };
-  const { id, created_at, ...rest } = row as any;
+  const rest = { ...(row as Record<string, unknown>) };
+  delete rest.id;
+  delete rest.created_at;
   return { ...base, ...rest };
 }
 
@@ -105,7 +107,7 @@ async function pushChanges(changes: Record<string, {
 export async function syncDatabase() {
   await synchronize({
     database,
-    pullChanges: async ({ lastPulledAt }) => pullChanges(lastPulledAt),
+    pullChanges: async ({ lastPulledAt }) => pullChanges(lastPulledAt ?? null),
     pushChanges: async ({ changes }) => pushChanges(changes as any),
     migrationsEnabledAtVersion: 1,
     sendCreatedAsUpdated: false,

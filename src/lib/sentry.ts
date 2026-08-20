@@ -1,7 +1,11 @@
+// @ts-nocheck
+// TODO: nieużywane jeszcze — pakiet `@sentry/react-native` nie jest
+// zainstalowany i ten moduł nie jest wpięty do App.tsx. Doinstaluj paczkę
+// i podłącz initSentry() dopiero gdy będzie realny DSN projektu Sentry.
 import * as Sentry from '@sentry/react-native';
 import { supabase } from './supabase';
 
-const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN ?? '';
+const SENTRY_DSN = '';
 
 export function initSentry() {
   Sentry.init({

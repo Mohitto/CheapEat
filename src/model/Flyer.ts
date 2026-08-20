@@ -1,5 +1,5 @@
-import { Model, Query, Relation } from '@nozbe/watermelondb';
-import { text, field, relation, children } from '@nozbe/watermelondb/decorators';
+import { Model, Relation } from '@nozbe/watermelondb';
+import { text, field, relation } from '@nozbe/watermelondb/decorators';
 import { Store } from './Store';
 
 export class Flyer extends Model {

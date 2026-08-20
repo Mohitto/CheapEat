@@ -1,7 +1,7 @@
 import database from '../model/database';
 import { Q } from '@nozbe/watermelondb';
-import Ingredient from '../model/Ingredient';
-import IngredientMapping from '../model/IngredientMapping';
+import { Ingredient } from '../model/Ingredient';
+import { IngredientMapping } from '../model/IngredientMapping';
 
 // ---------------------------------------------------------------------------
 // Normalizacja nazwy produktu -> dopasowanie do składnika bazowego
