@@ -70,6 +70,7 @@ yarn-error.log
 __pycache__/
 *.pyc
 scrapers/.env
+scrapers/.venv/
 
 # Yarn
 .yarn/*

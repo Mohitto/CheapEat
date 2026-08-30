@@ -11,8 +11,11 @@ scrapers/
 ├── seed_dev_data.py      # Dane testowe (NIE scraping) — pełny przepływ do testów
 ├── requirements.txt
 ├── .env.example
-└── biedronka/
-    ├── scraper.py          # Scraper Biedronki (API + HTML fallback, endpoint niezweryfikowany)
+├── biedronka/
+│   ├── scraper.py          # Scraper Biedronki (API + HTML fallback, endpoint niezweryfikowany)
+│   └── __init__.py
+└── lidl/
+    ├── scraper.py          # Scraper Lidla (best-effort szkielet, endpoint niezweryfikowany)
     └── __init__.py
 ```
 
@@ -48,25 +51,30 @@ insert zwróci błąd wskazujący konkretną kolumnę, popraw ją w skrypcie.
 
 ## GitHub Actions
 
-Cron odpala się automatycznie **w środę o 7:00 UTC** (Biedronka zmienia gazetkę środę).
+Cron scrapera odpala się automatycznie **w środę o 7:00 UTC** (Biedronka zmienia gazetkę środę).
+Runner GitHub Actions ma pełny dostęp do internetu (w przeciwieństwie do sandboxa
+Claude Code) — to jedyne miejsce, gdzie scrapery/seed script realnie się wykonają.
 
 ### Wymagane GitHub Secrets
 
-Dodaj w: `Settings → Secrets and variables → Actions`
+Dodaj w: `Settings → Secrets and variables → Actions → New repository secret`
 
 | Secret | Wartość |
 |--------|----------|
-| `SUPABASE_URL` | URL projektu Supabase |
-| `SUPABASE_SERVICE_KEY` | Service role key (nie anon!) |
+| `SUPABASE_URL` | URL projektu Supabase (`https://<ref>.supabase.co`) |
+| `SUPABASE_SERVICE_KEY` | **secret** key projektu (nowy format: `sb_secret_...`; nie `sb_publishable_...`/anon!) |
+
+Te same dwa sekrety obsługują oba workflow — `Scrape Flyers` i `Seed Dev Data`.
 
 ### Ręczne odpalenie
 
-`Actions → Scrape Flyers → Run workflow`
+- Scraper: `Actions → Scrape Flyers → Run workflow`
+- Dane testowe (patrz sekcja wyżej): `Actions → Seed Dev Data → Run workflow`
 
 ## Dodawanie nowego sklepu
 
-1. Utwórz katalog `scrapers/lidl/`
+1. Utwórz katalog `scrapers/<sklep>/`
 2. Napisz `scraper.py` dziedzicząc z `BaseScraper`
 3. Ustaw `store_name` i `store_website`
 4. Zaimplementuj `scrape()`
-5. Odkomentuj import w `run_all.py`
+5. Dodaj import + wpis w `SCRAPERS` w `run_all.py`
