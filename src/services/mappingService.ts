@@ -13,7 +13,7 @@
 import { supabase } from '../lib/supabase';
 import database from '../model/database';
 import { Q } from '@nozbe/watermelondb';
-import IngredientMapping from '../model/IngredientMapping';
+import { IngredientMapping } from '../model/IngredientMapping';
 import { matchProductToIngredient } from './ingredientService';
 
 // ---------------------------------------------------------------------------

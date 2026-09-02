@@ -1,5 +1,6 @@
 import { synchronize } from '@nozbe/watermelondb/sync';
-import { database } from '../db';
+import database from '../model/database';
+import { schema } from '../db/schema';
 import { supabase } from './supabase';
 
 const READ_ONLY_TABLES = [
@@ -8,7 +9,7 @@ const READ_ONLY_TABLES = [
 ] as const;
 
 const USER_TABLES = [
-  'receipts', 'receipt_items', 'recipes', 'recipe_ingredients',
+  'recipes', 'recipe_ingredients',
   'user_ingredient_preferences', 'user_favorite_recipes',
 ] as const;
 
@@ -18,13 +19,28 @@ type TableName = typeof ALL_TABLES[number];
 const toISO = (ts: number | null) =>
   ts ? new Date(ts).toISOString() : new Date(0).toISOString();
 
+/**
+ * Mapuje wiersz z Supabase (`select('*')`) na rekord WatermelonDB.
+ *
+ * Przepuszcza tylko kolumny faktycznie zdefiniowane w lokalnym schemacie
+ * danej tabeli — zdalna tabela w Supabase może mieć więcej kolumn niż jej
+ * lokalne, offline'owe lustro (np. `recipes` ma image_url/category/source/
+ * scraped_at, których WatermelonDB w ogóle nie potrzebuje). Bez tego
+ * filtrowania `synchronize()` wywali się przy próbie zapisania nieznanej
+ * kolumny do lokalnej bazy SQLite.
+ */
 function mapRecord(table: TableName, row: Record<string, unknown>) {
   const base = {
     id: row.id as string,
     remote_id: row.id as string,
     updated_at: new Date(row.updated_at as string).getTime(),
   };
-  const { id, created_at, ...rest } = row as any;
+  const knownColumns = schema.tables[table]?.columns ?? {};
+  const rest: Record<string, unknown> = {};
+  for (const column of Object.keys(knownColumns)) {
+    if (column === 'remote_id' || column === 'updated_at') continue; // już w base
+    if (column in row) rest[column] = row[column];
+  }
   return { ...base, ...rest };
 }
 
@@ -38,7 +54,7 @@ async function pullChanges(lastPulledAt: number | null) {
     let query = supabase.from(table).select('*').gt('updated_at', since);
 
     if ((USER_TABLES as readonly string[]).includes(table) && userId) {
-      if (['receipts', 'receipt_items', 'user_ingredient_preferences', 'user_favorite_recipes'].includes(table)) {
+      if (['user_ingredient_preferences', 'user_favorite_recipes'].includes(table)) {
         query = query.eq('user_id', userId);
       }
       if (table === 'recipes') {
@@ -105,7 +121,7 @@ async function pushChanges(changes: Record<string, {
 export async function syncDatabase() {
   await synchronize({
     database,
-    pullChanges: async ({ lastPulledAt }) => pullChanges(lastPulledAt),
+    pullChanges: async ({ lastPulledAt }) => pullChanges(lastPulledAt ?? null),
     pushChanges: async ({ changes }) => pushChanges(changes as any),
     migrationsEnabledAtVersion: 1,
     sendCreatedAsUpdated: false,

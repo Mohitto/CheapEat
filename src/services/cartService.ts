@@ -8,7 +8,6 @@
  * 4. optimizeCart()         — zamienia składniki na najtańsze dostępne produkty
  */
 import database from '../model/database';
-import { Q } from '@nozbe/watermelondb';
 import { getRecipeIngredients } from './recipeService';
 import { getMappingsByIngredient } from './mappingService';
 import { getCurrentPrice } from './priceService';

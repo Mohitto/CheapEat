@@ -1,12 +1,20 @@
-"""Scraper gazetki Biedronka.
+"""Scraper gazetki Lidl.
 
-UWAGA: endpoint poniżej (BIEDRONKA_API) NIE jest zweryfikowany na żywej
-stronie — nikt jeszcze nie potwierdził, że to realny adres. Ten plik nie
-był uruchomiony z internetem, który widzi biedronka.pl. Odpal go realnie
-(lokalnie albo przez GitHub Actions: Actions -> Scrape Flyers -> Run
-workflow) i wklej output/błąd -> na tej podstawie łatwo poprawić URL/klucze
-JSON. Ustaw env SCRAPER_DEBUG=1 żeby zrzucić surową odpowiedź do pliku
-i zobaczyć jej prawdziwy kształt.
+UWAGA: to jest best-effort szkielet napisany BEZ dostępu do internetu (sesja,
+w której to powstało, ma zablokowany ruch do lidl.pl). LIDL_API poniżej to
+zgadywanka na wzór biedronka/scraper.py, prawdopodobnie zła. Struktura kodu
+(fetch -> dump w trybie debug -> parsuj -> zapisz) jest identyczna jak w
+scraperze Biedronki celowo, żeby dało się to naprawić w 5 minut, kiedy
+zobaczymy realną odpowiedź.
+
+Jak naprawić:
+1. `export SCRAPER_DEBUG=1`
+2. `python -m lidl.scraper` (lokalnie, z realnym internetem) albo odpal przez
+   GitHub Actions
+3. Sprawdź debug_lidl_*.txt — jeśli LIDL_API zwróci 404/HTML zamiast JSON,
+   podmień URL na prawdziwy (widoczny np. w devtools -> Network na
+   lidl.pl/pl/c/gazetka podczas ładowania promocji)
+4. Dopasuj klucze w _parse_api_response do realnego JSON-a
 """
 import json
 import os
@@ -19,7 +27,11 @@ from base_scraper import BaseScraper
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
 
-BIEDRONKA_API = "https://www.biedronka.pl/pl/offers-api"
+# Zgadywanka — nie zweryfikowana. Alternatywa do sprawdzenia: strona gazetki
+# https://www.lidl.pl/c/gazetka (HTML) jeśli nie ma osobnego API.
+LIDL_API = "https://www.lidl.pl/pl/api/offers"
+LIDL_HOMEPAGE = "https://www.lidl.pl/"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; CheapEatBot/1.0)",
     "Accept": "application/json",
@@ -28,7 +40,6 @@ HEADERS = {
 
 
 def _dump_debug(name: str, content: str) -> None:
-    """Zapisuje surową odpowiedź do pliku, żeby dało się ją zobaczyć/wkleić."""
     path = f"debug_{name}.txt"
     with open(path, "w", encoding="utf-8") as f:
         f.write(content[:20000])
@@ -36,43 +47,51 @@ def _dump_debug(name: str, content: str) -> None:
     print(f"[DEBUG] Podgląd (500 znaków): {content[:500]!r}")
 
 
-class BiedronkaScraper(BaseScraper):
-    store_name = "Biedronka"
-    store_website = "https://www.biedronka.pl"
+class LidlScraper(BaseScraper):
+    store_name = "Lidl"
+    store_website = "https://www.lidl.pl"
 
     def scrape(self):
-        print(f"[Biedronka] Start scraping: {datetime.now().isoformat()}")
+        print(f"[Lidl] Start scraping: {datetime.now().isoformat()}")
 
         self.ensure_store()
-        print(f"[Biedronka] Store ID: {self.store_id}")
+        print(f"[Lidl] Store ID: {self.store_id}")
 
         try:
-            resp = requests.get(BIEDRONKA_API, headers=HEADERS, timeout=30)
+            resp = requests.get(LIDL_API, headers=HEADERS, timeout=30)
             resp.raise_for_status()
             if DEBUG:
-                _dump_debug("biedronka_api_response", resp.text)
+                _dump_debug("lidl_api_response", resp.text)
             data = resp.json()
         except Exception as e:
-            print(f"[Biedronka] Błąd pobierania/parsowania JSON z {BIEDRONKA_API}: {e}")
+            print(f"[Lidl] Błąd pobierania/parsowania JSON z {LIDL_API}: {e}")
             try:
-                _dump_debug("biedronka_api_error_body", resp.text)
+                _dump_debug("lidl_api_error_body", resp.text)
             except NameError:
                 pass
-            # Fallback: spróbuj scraping HTML
             return self._scrape_html_fallback()
 
         items = self._parse_api_response(data)
         if not items and DEBUG:
-            print("[Biedronka] 0 pozycji sparsowanych mimo poprawnej odpowiedzi JSON —")
-            print("[Biedronka] sprawdź debug_biedronka_api_response.txt, klucze w _parse_api_response nie pasują do realnej struktury.")
+            print("[Lidl] 0 pozycji sparsowanych mimo poprawnej odpowiedzi JSON —")
+            print("[Lidl] sprawdź debug_lidl_api_response.txt, klucze w _parse_api_response nie pasują do realnej struktury.")
         return self._save(items)
 
-    def _parse_api_response(self, data: dict) -> list[dict]:
-        """Parsuje odpowiedź API Biedronki do listy pozycji."""
+    def _parse_api_response(self, data) -> list[dict]:
+        """Parsuje odpowiedź API Lidla do listy pozycji.
+
+        Klucze zgadywane na wzór typowych API sklepowych (jak w
+        biedronka/scraper.py) — obsługujemy kilka wariantów nazw, ale
+        realny kształt trzeba zweryfikować na żywej odpowiedzi.
+        """
         items = []
 
-        # Struktura może się zmieniać — obsługujemy oba warianty
-        offers = data.get("offers") or data.get("products") or data.get("items") or []
+        if isinstance(data, dict):
+            offers = data.get("offers") or data.get("products") or data.get("items") or []
+        elif isinstance(data, list):
+            offers = data
+        else:
+            offers = []
 
         for offer in offers:
             try:
@@ -104,42 +123,41 @@ class BiedronkaScraper(BaseScraper):
                     "unit_amount": unit_amount,
                     "notes": offer.get("description") or offer.get("label"),
                 })
-            except (ValueError, TypeError) as e:
-                print(f"[Biedronka] Skip offer (parse error): {e}")
+            except (ValueError, TypeError, AttributeError) as e:
+                print(f"[Lidl] Skip offer (parse error): {e}")
                 continue
 
-        print(f"[Biedronka] Sparsowano {len(items)} pozycji z API")
+        print(f"[Lidl] Sparsowano {len(items)} pozycji z API")
         return items
 
     def _scrape_html_fallback(self) -> dict:
-        """Fallback: pobiera stronę gazetki jako HTML i zapisuje do pliku.
+        """Fallback: pobiera stronę główną jako HTML i zapisuje do pliku.
 
-        Nie parsuje HTML (struktura strony nieznana bez realnego dostępu) —
-        celowo tylko zrzuca surową odpowiedź, żeby dało się zobaczyć co
-        naprawdę zwraca serwer i napisać parser na tej podstawie.
+        Celowo nie parsuje HTML — struktura strony nieznana bez realnego
+        dostępu. Zrzuca surową odpowiedź, żeby dało się znaleźć prawdziwy
+        link/endpoint gazetki i napisać parser na tej podstawie.
         """
-        print("[Biedronka] Fallback: pobieram HTML strony gazetki...")
+        print("[Lidl] Fallback: pobieram HTML strony głównej...")
         try:
             resp = requests.get(
-                "https://www.biedronka.pl/pl/gazetki",
+                LIDL_HOMEPAGE,
                 headers={**HEADERS, "Accept": "text/html"},
                 timeout=30,
             )
             resp.raise_for_status()
-            _dump_debug("biedronka_html_fallback", resp.text)
+            _dump_debug("lidl_html_fallback", resp.text)
         except Exception as e:
-            print(f"[Biedronka] Fallback HTML też zawiódł: {e}")
+            print(f"[Lidl] Fallback HTML też zawiódł: {e}")
             return {"scraped": 0, "prices": 0, "error": str(e)}
 
         return {"scraped": 0, "prices": 0, "error": "HTML fallback: zrzucono stronę, parser jeszcze nie napisany"}
 
     def _save(self, items: list[dict]) -> dict:
         if not items:
-            print("[Biedronka] Brak pozycji do zapisania")
+            print("[Lidl] Brak pozycji do zapisania")
             return {"scraped": 0, "prices": 0}
 
         today = datetime.now().strftime("%Y-%m-%d")
-        # Biedronka zmienia gazetkę w środę — oblicz najbliższy czwartek -7
         valid_from = today
         valid_to = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
 
@@ -147,9 +165,9 @@ class BiedronkaScraper(BaseScraper):
         saved = self.upsert_flyer_items(flyer_id, items)
         prices = self.upsert_prices(items, valid_from, valid_to)
 
-        print(f"[Biedronka] Zapisano: {saved} pozycji gazetki, {prices} cen")
+        print(f"[Lidl] Zapisano: {saved} pozycji gazetki, {prices} cen")
         return {"scraped": saved, "prices": prices}
 
 
 if __name__ == "__main__":
-    BiedronkaScraper().scrape()
+    LidlScraper().scrape()

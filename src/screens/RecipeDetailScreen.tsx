@@ -7,7 +7,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { getRecipeById, calculateRecipeCost, type RecipeCostResult } from '../services/recipeService';
 import { buildCartForRecipes } from '../services/cartService';
-import Recipe from '../model/Recipe';
+import { Recipe } from '../model/Recipe';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RecipeDetail'>;
 
@@ -35,7 +35,7 @@ export function RecipeDetailScreen({ route }: Props) {
     try {
       await buildCartForRecipes([{ recipeId, portions: recipe?.portions ?? 1 }]);
       Alert.alert('Dodano do koszyka', 'Przejdź do zakładki Koszyk aby zobaczyć wyniki.');
-    } catch (e) {
+    } catch {
       Alert.alert('Błąd', 'Nie udało się dodać do koszyka.');
     } finally {
       setAddingToCart(false);

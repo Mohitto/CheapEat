@@ -1,7 +1,12 @@
+// @ts-nocheck
+// TODO: nieużywane jeszcze — pakiet `react-native-onesignal` nie jest
+// zainstalowany i ten moduł nie jest wpięty do App.tsx. Doinstaluj paczkę
+// i podłącz initOneSignal() dopiero gdy powiadomienia push będą gotowe do testów
+// (wymaga też natywnej konfiguracji Android/iOS pod OneSignal).
 import OneSignal from 'react-native-onesignal';
 import { supabase } from './supabase';
 
-const ONESIGNAL_APP_ID = process.env.EXPO_PUBLIC_ONESIGNAL_APP_ID ?? '';
+const ONESIGNAL_APP_ID = 'c4710f1e-a5bd-405e-8dc1-96e20c379996';
 
 export function initOneSignal() {
   OneSignal.setAppId(ONESIGNAL_APP_ID);

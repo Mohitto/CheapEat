@@ -1,7 +1,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 3,
+  version: 4,
   tables: [
 
     // ── READ-ONLY ──────────────────────────────────────────────────
@@ -94,37 +94,6 @@ export const schema = appSchema({
     }),
 
     // ── USER DATA ───────────────────────────────────────────────
-    tableSchema({
-      name: 'receipts',
-      columns: [
-        { name: 'remote_id',    type: 'string', isOptional: true },
-        { name: 'user_id',      type: 'string', isIndexed: true },
-        { name: 'store_id',     type: 'string', isOptional: true },
-        { name: 'receipt_date', type: 'string' },
-        { name: 'image_url',    type: 'string', isOptional: true },
-        { name: 'ocr_status',   type: 'string' },
-        { name: 'total_amount', type: 'number', isOptional: true },
-        { name: 'updated_at',   type: 'number' },
-      ],
-    }),
-
-    // v3: receipt_items przepisane pod OCR (raw_name, matched_name, gross_price, confidence)
-    tableSchema({
-      name: 'receipt_items',
-      columns: [
-        { name: 'remote_id',        type: 'string', isOptional: true },
-        { name: 'receipt_id',       type: 'string', isIndexed: true },
-        { name: 'store_product_id', type: 'string', isOptional: true },
-        { name: 'raw_name',         type: 'string' },
-        { name: 'matched_name',     type: 'string', isOptional: true },
-        { name: 'gross_price',      type: 'number', isOptional: true },
-        { name: 'quantity',         type: 'number' },
-        { name: 'unit',             type: 'string', isOptional: true },
-        { name: 'confidence',       type: 'number', isOptional: true },
-        { name: 'updated_at',       type: 'number' },
-      ],
-    }),
-
     tableSchema({
       name: 'recipes',
       columns: [

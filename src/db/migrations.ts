@@ -1,4 +1,4 @@
-import { schemaMigrations, addColumns, createTable } from '@nozbe/watermelondb/Schema/migrations';
+import { schemaMigrations, addColumns, unsafeExecuteSql } from '@nozbe/watermelondb/Schema/migrations';
 
 /**
  * WatermelonDB migrations.
@@ -40,6 +40,14 @@ export const migrations = schemaMigrations({
             { name: 'confidence',       type: 'number', isOptional: true },
           ],
         }),
+      ],
+    },
+    {
+      // v3 -> v4: funkcja paragonów (OCR) porzucona — usuwamy receipts/receipt_items
+      toVersion: 4,
+      steps: [
+        unsafeExecuteSql('DROP TABLE IF EXISTS receipts;'),
+        unsafeExecuteSql('DROP TABLE IF EXISTS receipt_items;'),
       ],
     },
   ],
