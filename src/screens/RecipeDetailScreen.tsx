@@ -81,7 +81,10 @@ export function RecipeDetailScreen({ route }: Props) {
       <Text style={s.sectionTitle}>Składniki</Text>
       {cost?.lines.map(line => (
         <View key={line.ingredientId} style={s.ingredientRow}>
-          <Text style={s.ingredientName}>{line.ingredientName}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.ingredientName}>{line.ingredientName}</Text>
+            {line.storeName && <Text style={s.ingredientStore}>{line.storeName}</Text>}
+          </View>
           <Text style={s.ingredientAmt}>{line.amount} {line.unit}</Text>
           <Text style={[s.ingredientCost, !line.costPln && s.noCost]}>
             {line.costPln != null ? `${line.costPln.toFixed(2)} zł` : '—'}
@@ -119,7 +122,8 @@ const s = StyleSheet.create({
   missingText:    { marginTop: 6, fontSize: 12, color: '#E74C3C' },
   sectionTitle:   { fontSize: 14, fontWeight: '700', color: '#555', paddingHorizontal: 16, paddingVertical: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   ingredientRow:  { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  ingredientName: { flex: 1, fontSize: 15, color: '#111' },
+  ingredientName: { fontSize: 15, color: '#111' },
+  ingredientStore:{ fontSize: 12, color: '#999', marginTop: 2 },
   ingredientAmt:  { fontSize: 14, color: '#666', marginRight: 12 },
   ingredientCost: { fontSize: 14, fontWeight: '600', color: '#2ECC71', minWidth: 52, textAlign: 'right' },
   noCost:         { color: '#ccc' },

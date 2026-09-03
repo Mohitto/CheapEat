@@ -79,6 +79,24 @@ export function CartScreen() {
     <ScrollView style={s.container} contentContainerStyle={{ paddingBottom: 40 }}>
       <Text style={s.header}>Koszyk</Text>
 
+      {/* Dwie ceny: jeden sklep vs. najtaniej łącząc sklepy */}
+      {cart && (cart.totalCostPln != null || cart.mixedStoreTotalPln != null) && (
+        <View style={s.totalsBox}>
+          {cart.totalCostPln != null && (
+            <View style={s.totalCard}>
+              <Text style={s.totalLabel}>Wszystko w {cart.cheapestStoreName ?? 'jednym sklepie'}</Text>
+              <Text style={s.totalValue}>{cart.totalCostPln.toFixed(2)} zł</Text>
+            </View>
+          )}
+          {cart.mixedStoreTotalPln != null && (
+            <View style={[s.totalCard, s.totalCardAlt]}>
+              <Text style={s.totalLabel}>Najtaniej łącząc sklepy</Text>
+              <Text style={s.totalValue}>{cart.mixedStoreTotalPln.toFixed(2)} zł</Text>
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Podsumowanie sklepów */}
       {cart && cart.storeSummaries.length > 0 && (
         <View style={s.storesBox}>
@@ -139,6 +157,12 @@ const s = StyleSheet.create({
   header:          { fontSize: 24, fontWeight: '700', padding: 16, paddingTop: 56, backgroundColor: '#fff' },
   empty:           { textAlign: 'center', marginTop: 60, color: '#999' },
   sectionTitle:    { fontSize: 12, fontWeight: '700', color: '#888', paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
+  // Dwie ceny
+  totalsBox:       { flexDirection: 'row', gap: 10, padding: 12 },
+  totalCard:       { flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 14, borderWidth: 1.5, borderColor: '#2ECC71' },
+  totalCardAlt:    { borderColor: '#F39C12' },
+  totalLabel:      { fontSize: 12, color: '#888', marginBottom: 6 },
+  totalValue:      { fontSize: 20, fontWeight: '700', color: '#111' },
   // Wybór przepisów
   pickCard:        { backgroundColor: '#fff', borderRadius: 10, padding: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1.5, borderColor: 'transparent' },
   pickCardActive:  { borderColor: '#2ECC71', backgroundColor: '#f0faf5' },

@@ -12,6 +12,8 @@ export class Recipe extends Model {
   @text('remote_id')             remoteId?: string;
   @text('title')                 title!: string;
   @text('source_url')            sourceUrl?: string;
+  @text('image_url')             imageUrl?: string;
+  @text('category')              category?: string;
   @field('prep_minutes')         prepMinutes?: number;
   @field('portions')             portions!: number;
   @field('protein_per_portion')  proteinPerPortion?: number;

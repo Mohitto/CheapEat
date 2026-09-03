@@ -23,6 +23,23 @@ export async function getPublicRecipes(): Promise<Recipe[]> {
 }
 
 /**
+ * Zwraca publiczne przepisy do Feedu — najnowsze pierwsze, opcjonalnie
+ * przefiltrowane po tytule. Jedno źródło danych (lokalna baza) dla
+ * wszystkich ekranów, żeby przepisy wyglądały i liczyły się tak samo
+ * niezależnie od tego skąd pochodzą (scraper, seed, przyszłe źródła).
+ */
+export async function getFeedRecipes(searchQuery: string = ''): Promise<Recipe[]> {
+  const clauses = [
+    Q.where('is_public', true),
+    Q.sortBy('updated_at', Q.desc),
+  ];
+  if (searchQuery.trim()) {
+    clauses.unshift(Q.where('title', Q.like(`%${Q.sanitizeLikeString(searchQuery.trim())}%`)));
+  }
+  return database.get<Recipe>('recipes').query(...clauses).fetch();
+}
+
+/**
  * Zwraca przepis po ID.
  */
 export async function getRecipeById(recipeId: string): Promise<Recipe | null> {
@@ -56,6 +73,7 @@ export type IngredientCostLine = {
   unit: string;
   costPln: number | null;    // null = brak ceny w bazie
   pricePerUnit: number | null;
+  storeName: string | null;  // sklep, w którym znaleziono najtańszą opcję
 };
 
 export type RecipeCostResult = {
@@ -96,26 +114,35 @@ export async function calculateRecipeCost(
       ingredientName = (ingredient as any).name ?? ingredientId;
     } catch {}
 
-    // Pobierz mapowania produkt -> składnik posortowane priorytetem
+    // Pobierz mapowania produkt -> składnik
     const mappings = await getIngredientMappings(ingredientId);
+    const amount = (ri as any).amount as number;
 
     let costPln: number | null = null;
     let pricePerUnit: number | null = null;
+    let storeName: string | null = null;
 
-    // Iteruj po mapowaniach — użyj pierwszego które ma cenę
+    // Sprawdź WSZYSTKIE mapowania i wybierz najtańszą opcję (nie pierwszą z brzegu)
     for (const mapping of mappings) {
       const storeProductId = (mapping as any).storeProductId as string;
       const price = await getCurrentPrice(storeProductId);
+      if (price === null) continue;
 
-      if (price !== null) {
-        const conversionFactor = (mapping as any).conversionFactor ?? 1;
-        const costPer100g = calculateIngredientCostPer100g(price, conversionFactor);
+      const conversionFactor = (mapping as any).conversionFactor ?? 1;
+      const costPer100g = calculateIngredientCostPer100g(price, conversionFactor);
+      const candidateCost = (costPer100g / 100) * amount;
 
-        // Przelicz na ilość użytą w przepisie (amount w gramach)
-        const amount = (ri as any).amount as number;
-        costPln = (costPer100g / 100) * amount;
+      if (costPln === null || candidateCost < costPln) {
+        costPln = candidateCost;
         pricePerUnit = price;
-        break;
+        try {
+          const product = await database.get('store_products').find(storeProductId);
+          const storeId = (product as any).storeId as string;
+          const store = await database.get('stores').find(storeId);
+          storeName = (store as any).name ?? null;
+        } catch {
+          storeName = null;
+        }
       }
     }
 
@@ -129,10 +156,11 @@ export async function calculateRecipeCost(
     lines.push({
       ingredientId,
       ingredientName,
-      amount: (ri as any).amount,
+      amount,
       unit: (ri as any).unit,
       costPln,
       pricePerUnit,
+      storeName,
     });
   }
 

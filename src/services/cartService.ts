@@ -50,9 +50,12 @@ export type StoreCartSummary = {
 export type CartResult = {
   lines: CartIngredientLine[];
   storeSummaries: StoreCartSummary[];
+  /** Najtaniej, jeśli kupujemy WSZYSTKO w jednym sklepie (ten z pełnym pokryciem i najniższą sumą). */
   cheapestStoreId: string | null;
   cheapestStoreName: string | null;
   totalCostPln: number | null;
+  /** Najtaniej, jeśli każdy składnik kupujemy tam gdzie jest najtańszy (może być kilka sklepów naraz). */
+  mixedStoreTotalPln: number | null;
   missingPrices: string[];
 };
 
@@ -210,12 +213,19 @@ export async function buildCartForRecipes(
 
   const cheapest = fullCoverage[0] ?? storeSummaries.sort((a, b) => b.coveragePercent - a.coveragePercent)[0] ?? null;
 
+  // 6. Najtaniej łącząc sklepy — suma najtańszej opcji per składnik, niezależnie od sklepu
+  const linesWithPrice = lines.filter(l => l.bestProduct !== null);
+  const mixedStoreTotalPln = linesWithPrice.length > 0
+    ? Math.round(linesWithPrice.reduce((sum, l) => sum + l.bestProduct!.totalCostPln, 0) * 100) / 100
+    : null;
+
   return {
     lines,
     storeSummaries,
     cheapestStoreId:   cheapest?.storeId ?? null,
     cheapestStoreName: cheapest?.storeName ?? null,
     totalCostPln:      cheapest ? Math.round(cheapest.totalCostPln * 100) / 100 : null,
+    mixedStoreTotalPln,
     missingPrices,
   };
 }
