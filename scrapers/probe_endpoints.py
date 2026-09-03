@@ -167,20 +167,35 @@ def probe_lidl_deep(url: str) -> None:
         idx = unescaped.find(needle, pos)
         if idx == -1:
             break
-        # cofnij się do '{' który otwiera obiekt zawierający "price"
-        brace_idx = unescaped.rfind('{', 0, idx)
-        # cofnij się jeszcze raz, żeby złapać obiekt produktu (rodzic "price")
-        parent_search_start = max(0, brace_idx - 4000)
-        outer_brace_idx = unescaped.rfind('{"', parent_search_start, brace_idx)
-        candidate_start = outer_brace_idx if outer_brace_idx != -1 else brace_idx
 
-        blob = _extract_balanced_json(unescaped, candidate_start)
-        print(f"\n-- Kandydat #{shown+1} (start={candidate_start}), długość={len(blob) if blob else 0} --")
+        # Zawsze pokaż surowy kontekst — niezawodne, niezależnie od tego czy
+        # bracket-matching poniżej trafi we właściwy obiekt.
+        ctx_start = max(0, idx - 1500)
+        print(f"\n-- Surowy kontekst wokół wystąpienia #{shown+1} (offset {idx}): --")
+        print(unescaped[ctx_start:idx + 300])
+
+        # Znajdź NAJMNIEJSZY obiekt {...} który faktycznie OBEJMUJE idx —
+        # idąc wstecz po kolejnych '{' i sprawdzając, czy jego zbalansowany
+        # zasięg sięga za idx (poprzednia wersja tego po prostu zgadywała
+        # drugi rfind, co czasem łapało zupełnie inny, sąsiedni obiekt).
+        search_pos = idx
+        blob = None
+        for _ in range(20):
+            brace_idx = unescaped.rfind('{', 0, search_pos)
+            if brace_idx == -1:
+                break
+            end = _extract_balanced_json(unescaped, brace_idx)
+            if end is not None and brace_idx + len(end) > idx:
+                blob = end
+                break
+            search_pos = brace_idx
+
+        print(f"-- Kandydat #{shown+1} zbalansowany obiekt, długość={len(blob) if blob else 0} --")
         if blob:
             print(blob[:3000])
             try:
                 parsed = json.loads(blob)
-                print(f"  [JSON OK] klucze top-level: {list(parsed.keys())[:20]}")
+                print(f"  [JSON OK] klucze top-level: {list(parsed.keys())[:30]}")
             except Exception as e:
                 print(f"  [JSON PARSE FAIL] {e}")
         shown += 1
