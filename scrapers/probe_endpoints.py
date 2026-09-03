@@ -240,6 +240,53 @@ def find_grocery_link(nav_url: str) -> str | None:
     return chosen
 
 
+IMAGE_PATTERN = re.compile(r'["\']([^"\']+\.(?:jpe?g|png|webp|gif))(?:[?"\']|$)', re.IGNORECASE)
+PDF_PATTERN = re.compile(r'["\']([^"\']+\.pdf)(?:[?"\']|$)', re.IGNORECASE)
+INLINE_SCRIPT_PATTERN = re.compile(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
+
+
+def probe_biedronka_flipbook(url: str) -> None:
+    """Biedronka press,id,... to viewer oparty o createjs (canvas). Cel: czy
+    strony gazetki to osadzone obrazki/PDF z realnym tekstem, czy czysto
+    zeskanowane bitmapy bez warstwy tekstowej. Jeśli znajdziemy PDF z
+    warstwą tekstową, to najprostsza droga do prawdziwych cen Biedronki —
+    bez OCR. Jeśli tylko obrazki, OCR (pytesseract) to następny krok."""
+    print(f"\n{'='*70}")
+    print(f"Biedronka FLIPBOOK PROBE -> {url}")
+    print("=" * 70)
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        print(f"status={resp.status_code} bytes={len(resp.content)}")
+    except Exception as e:
+        print(f"[FETCH ERROR] {e}")
+        return
+
+    page_html = resp.text
+
+    pdf_hits = sorted(set(PDF_PATTERN.findall(page_html)))
+    print(f"\n-- Linki .pdf: {len(pdf_hits)} --")
+    for l in pdf_hits[:20]:
+        print(f"  {l}")
+
+    image_hits = sorted(set(IMAGE_PATTERN.findall(page_html)))
+    print(f"\n-- Linki do obrazków (jpg/png/webp/gif): {len(image_hits)} --")
+    for l in image_hits[:40]:
+        print(f"  {l}")
+
+    # Inline <script> (bez src) — tu prawdopodobnie config flipbooka
+    # (lista stron, bazowy URL obrazków, itp.)
+    inline_scripts = INLINE_SCRIPT_PATTERN.findall(page_html)
+    print(f"\n-- Inline <script> bloków: {len(inline_scripts)} --")
+    for i, blob in enumerate(inline_scripts):
+        stripped = blob.strip()
+        if not stripped:
+            continue
+        keywords = ["page", "gazet", "press", "config", "issuu", "flipbook", "cdn", ".jpg", ".png"]
+        if any(k in stripped.lower() for k in keywords):
+            print(f"\n  -- Script #{i} ({len(stripped)} znaków), zawiera słowo kluczowe --")
+            print(f"  {stripped[:1500]}")
+
+
 def probe_bare_api(url: str) -> None:
     print(f"\n{'='*70}")
     print(f"BARE API PROBE -> {url}")
@@ -252,19 +299,18 @@ def probe_bare_api(url: str) -> None:
         print(f"[FETCH ERROR] {e}")
 
 
+BIEDRONKA_PRESS_URLS = [
+    "https://www.biedronka.pl/pl/press,id,j0pu3be7s,title,codziennie-niskie-ceny-p-oferta-od-03-09",
+]
+
+
 def main():
-    for name, url in GENERIC_PAGES:
-        probe(name, url)
-
-    # Runda 5: nawigacja zwróciła dwa linki spożywcze, ale wybór
-    # pierwszego alfabetycznie trafił w "psi-patrol-owoce-i-warzywa"
-    # (crossover z kreskówką, 0 cen) zamiast prawdziwej kategorii
-    # "zywnosc-i-napoje". Odpalam ją bezpośrednio.
-    probe_lidl_deep("żywność i napoje (prawdziwe spożywcze)",
-                     "https://www.lidl.pl/c/zywnosc-i-napoje/s10068374", max_shown=5)
-
-    for api_url in LIDL_API_CANDIDATES:
-        probe_bare_api(api_url)
+    # Runda 7: Biedronka jest priorytetem dla użytkownika (bliżej, częściej
+    # testowana) mimo że Lidl już działa. Sprawdzamy czy flipbook viewer
+    # (createjs-based) ładuje strony jako PDF z warstwą tekstową (najlepszy
+    # przypadek — parsowalne bez OCR) czy jako czyste obrazki (wymaga OCR).
+    for url in BIEDRONKA_PRESS_URLS:
+        probe_biedronka_flipbook(url)
 
 
 if __name__ == "__main__":
