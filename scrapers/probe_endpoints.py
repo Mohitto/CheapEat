@@ -28,16 +28,20 @@ HEADERS = {
 }
 
 PAGES = [
-    ("Biedronka gazetki", "https://www.biedronka.pl/pl/gazetki"),
-    ("Biedronka homepage", "https://www.biedronka.pl/"),
-    ("Lidl homepage", "https://www.lidl.pl/"),
+    # Runda 1 (poprzednie odpalenie) namierzyła te dwie strony jako
+    # najbardziej obiecujące realne źródła cen/gazetek:
+    ("Lidl promocje (kategoria)", "https://www.lidl.pl/c/promocje/s10076831"),
+    ("Biedronka gazetka (press viewer)",
+     "https://www.biedronka.pl/pl/press,id,j0pu3be7s,title,codziennie-niskie-ceny-p-oferta-od-03-09"),
 ]
 
 KEYWORDS = ["gazet", "promo", "ofert", "leaflet", "flyer", "katalog"]
 API_PATTERN = re.compile(r"[\"']([^\"'\s]{0,200}(?:/api/|/graphql|\.json)[^\"'\s]{0,100})[\"']", re.IGNORECASE)
 LINK_PATTERN = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
-SCRIPT_ID_PATTERN = re.compile(r'<script[^>]*id=["\'](__NEXT_DATA__|__INITIAL_STATE__)["\'][^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
-INLINE_ASSIGN_PATTERN = re.compile(r'window\.(__\w+__|\w*[Ss]tate\w*|\w*[Dd]ata\w*)\s*=\s*(\{.{0,300})', re.DOTALL)
+SCRIPT_ID_PATTERN = re.compile(r'<script[^>]*id=["\'](__NEXT_DATA__|__INITIAL_STATE__|__NUXT__)["\'][^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
+INLINE_ASSIGN_PATTERN = re.compile(r'window\.(__\w+__|\w*[Ss]tate\w*|\w*[Dd]ata\w*|dataLayer)\s*=\s*(\[?\{.{0,300})', re.DOTALL)
+JSONLD_PATTERN = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL)
+FRAMEWORK_MARKERS = ["data-reactroot", "ng-version", "__NUXT__", "id=\"__next\"", "data-vue", "webpack"]
 
 
 def probe(name: str, url: str) -> None:
@@ -53,6 +57,14 @@ def probe(name: str, url: str) -> None:
 
     html = resp.text
 
+    print(f"\n-- Pierwsze 2000 znaków surowego HTML: --")
+    print(html[:2000])
+
+    print(f"\n-- Wystąpienia 'zł' w HTML: {html.count('zł')} --")
+
+    found_markers = [m for m in FRAMEWORK_MARKERS if m in html]
+    print(f"\n-- Markery frameworka JS znalezione: {found_markers} --")
+
     # 1. Linki z gazetkowymi słowami kluczowymi
     links = set(LINK_PATTERN.findall(html))
     matching_links = sorted({l for l in links if any(k in l.lower() for k in KEYWORDS)})
@@ -60,20 +72,34 @@ def probe(name: str, url: str) -> None:
     for l in matching_links[:30]:
         print(f"  {l}")
 
-    # 2. Next.js / initial-state JSON
+    # 2. JSON-LD (schema.org) — czasem zawiera Product/Offer z ceną
+    jsonld_blobs = JSONLD_PATTERN.findall(html)
+    print(f"\n-- Bloków JSON-LD: {len(jsonld_blobs)} --")
+    for blob in jsonld_blobs[:5]:
+        print(blob[:800])
+        print("  ...")
+
+    # 3. Next.js / initial-state JSON
     for match_id, blob in SCRIPT_ID_PATTERN.findall(html):
-        print(f"\n-- Znaleziono <script id=\"{match_id}\"> ({len(blob)} znaków), pierwsze 1500: --")
-        print(blob[:1500])
+        print(f"\n-- Znaleziono <script id=\"{match_id}\"> ({len(blob)} znaków), pierwsze 2000: --")
+        print(blob[:2000])
 
     for var_name, blob in INLINE_ASSIGN_PATTERN.findall(html):
         print(f"\n-- Znaleziono window.{var_name} = ... , pierwsze 500 znaków: --")
         print(blob[:500])
 
-    # 3. Stringi wyglądające jak endpointy API
+    # 4. Stringi wyglądające jak endpointy API
     api_hits = sorted(set(API_PATTERN.findall(html)))
     print(f"\n-- Stringi wyglądające jak API endpoint: {len(api_hits)} --")
     for hit in api_hits[:40]:
         print(f"  {hit}")
+
+    # 5. Fragment wokół pierwszego wystąpienia 'zł' — realny przykład ceny w HTML
+    idx = html.find('zł')
+    if idx != -1:
+        start = max(0, idx - 300)
+        print(f"\n-- Kontekst wokół pierwszego 'zł' (offset {idx}): --")
+        print(html[start:idx + 100])
 
 
 def main():
