@@ -108,9 +108,8 @@ export async function calculateRecipeCost(
       const price = await getCurrentPrice(storeProductId);
 
       if (price !== null) {
-        const unitAmount = 100; // domyślnie przeliczamy na 100g
         const conversionFactor = (mapping as any).conversionFactor ?? 1;
-        const costPer100g = calculateIngredientCostPer100g(price, unitAmount, conversionFactor);
+        const costPer100g = calculateIngredientCostPer100g(price, conversionFactor);
 
         // Przelicz na ilość użytą w przepisie (amount w gramach)
         const amount = (ri as any).amount as number;
