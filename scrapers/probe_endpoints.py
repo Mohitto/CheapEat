@@ -35,11 +35,21 @@ HEADERS = {
     "Accept-Language": "pl-PL,pl;q=0.9",
 }
 
-GENERIC_PAGES = [
-    ("Biedronka home.biedronka.pl/promocje", "https://home.biedronka.pl/promocje/"),
-]
+GENERIC_PAGES = []
 
+# Runda 4 potwierdziła: pełny obiekt produktu w SSR HTML Lidla ma schemat
+# {..., "keyfacts": {"title", "fullTitle", ...}, "price": {"currencyCode",
+# "price", "oldPrice", "discount", ...}, "image", "ians", ...}. Ale
+# /c/promocje/s10076831 to WYŁĄCZNIE nie-spożywcze produkty tygodnia
+# (rolety, koszule, kurtki) — typowe dla dyskontów "oferty tygodnia" osobno
+# od zwykłych spożywczych. Do przepisów potrzebujemy działu spożywczego,
+# więc ta runda szuka linku do takiej kategorii w nawigacji i sprawdza, czy
+# ten sam schemat (i pole gramatury/jednostki, którego jeszcze nie widzieliśmy)
+# występuje tam.
 LIDL_PROMO_URL = "https://www.lidl.pl/c/promocje/s10076831"
+LIDL_NAV_SOURCE_URL = "https://www.lidl.pl/"
+GROCERY_KEYWORDS = ["spozywcze", "nabial", "pieczywo", "mieso", "wedlin", "napoje",
+                     "swiez", "owoce", "warzywa", "mrozon", "produkty-spozywcze"]
 LIDL_API_CANDIDATES = [
     "https://www.lidl.pl/q/api/gridboxes",
     "https://www.lidl.pl/q/api/search",
@@ -134,9 +144,9 @@ def _extract_balanced_json(text: str, start_brace_idx: int) -> str | None:
     return None
 
 
-def probe_lidl_deep(url: str) -> None:
+def probe_lidl_deep(name: str, url: str, max_shown: int = 3) -> None:
     print(f"\n{'='*70}")
-    print(f"Lidl DEEP EXTRACT -> {url}")
+    print(f"Lidl DEEP EXTRACT [{name}] -> {url}")
     print("=" * 70)
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
@@ -148,58 +158,86 @@ def probe_lidl_deep(url: str) -> None:
     page_html = resp.text
     unescaped = html_module.unescape(page_html)
 
-    # Znajdź custom elementy przenoszące stan (Web Components z SSR hydration)
-    tags_found = set()
-    for tag, attr in STATE_ATTR_PATTERN.findall(page_html):
-        tags_found.add((tag.lower(), attr.lower()))
-    print(f"\n-- Custom elementy ze stanem (tag, atrybut): {sorted(tags_found)[:20]} --")
-
-    # Znajdź wszystkie wystąpienia klucza "price" poprzedzonego "currencyCode"
-    # w ODESCAPOWANYM tekście i wyciągnij zbalansowany obiekt JSON zawierający je,
-    # cofając się do najbliższego '{' przed dopasowaniem.
     needle = '"currencyCode":"PLN"'
     count = unescaped.count(needle)
     print(f"\n-- Wystąpień {needle!r} po html.unescape: {count} --")
 
     shown = 0
     pos = 0
-    while shown < 3:
+    while shown < max_shown:
         idx = unescaped.find(needle, pos)
         if idx == -1:
             break
 
-        # Zawsze pokaż surowy kontekst — niezawodne, niezależnie od tego czy
-        # bracket-matching poniżej trafi we właściwy obiekt.
-        ctx_start = max(0, idx - 1500)
-        print(f"\n-- Surowy kontekst wokół wystąpienia #{shown+1} (offset {idx}): --")
-        print(unescaped[ctx_start:idx + 300])
-
-        # Znajdź NAJMNIEJSZY obiekt {...} który faktycznie OBEJMUJE idx —
-        # idąc wstecz po kolejnych '{' i sprawdzając, czy jego zbalansowany
-        # zasięg sięga za idx (poprzednia wersja tego po prostu zgadywała
-        # drugi rfind, co czasem łapało zupełnie inny, sąsiedni obiekt).
+        # Znajdź obiekt PRODUKTU (zawiera i "keyfacts" i "price":{...}), nie
+        # tylko najmniejszy obiekt obejmujący idx (to byłby sam "price").
+        # Idziemy wstecz po kolejnych '{', licząc zbalansowany zasięg każdego,
+        # aż trafimy na taki, który sięga za idx ORAZ zawiera "keyfacts".
         search_pos = idx
         blob = None
-        for _ in range(20):
+        for _ in range(40):
             brace_idx = unescaped.rfind('{', 0, search_pos)
             if brace_idx == -1:
                 break
             end = _extract_balanced_json(unescaped, brace_idx)
-            if end is not None and brace_idx + len(end) > idx:
+            if end is not None and brace_idx + len(end) > idx and '"keyfacts"' in end:
                 blob = end
                 break
             search_pos = brace_idx
 
-        print(f"-- Kandydat #{shown+1} zbalansowany obiekt, długość={len(blob) if blob else 0} --")
+        print(f"\n-- Produkt #{shown+1}, długość obiektu={len(blob) if blob else 0} --")
         if blob:
-            print(blob[:3000])
             try:
                 parsed = json.loads(blob)
-                print(f"  [JSON OK] klucze top-level: {list(parsed.keys())[:30]}")
+                keyfacts = parsed.get("keyfacts", {})
+                price = parsed.get("price", {})
+                print(f"  nazwa: {keyfacts.get('fullTitle') or keyfacts.get('title')}")
+                print(f"  cena: {price.get('price')} {price.get('currencySymbol')} (było: {price.get('oldPrice')})")
+                other_keys = [k for k in parsed.keys()
+                              if k not in ("keyfacts", "price", "image", "image_V1", "imageList",
+                                           "imageList_V1", "gs1Attributes", "guaranteeLabels", "ians")]
+                print(f"  pozostałe klucze top-level: {other_keys}")
+                # Pola, które mogłyby nieść gramaturę/jednostkę
+                for k in other_keys:
+                    v = parsed[k]
+                    if isinstance(v, (str, int, float, bool)) and any(
+                        hint in k.lower() for hint in ("unit", "gram", "quant", "pack", "measur", "weight", "volum")
+                    ):
+                        print(f"    kandydat na gramaturę/jednostkę: {k}={v!r}")
             except Exception as e:
                 print(f"  [JSON PARSE FAIL] {e}")
+                print(f"  surowy fragment: {blob[:1000]}")
+        else:
+            ctx_start = max(0, idx - 500)
+            print(f"  Nie znaleziono obiektu produktu — surowy kontekst:")
+            print(unescaped[ctx_start:idx + 200])
         shown += 1
         pos = idx + len(needle)
+
+
+def find_grocery_link(nav_url: str) -> str | None:
+    print(f"\n{'='*70}")
+    print(f"Szukam linku do kategorii spożywczej w nawigacji -> {nav_url}")
+    print("=" * 70)
+    try:
+        resp = requests.get(nav_url, headers=HEADERS, timeout=30)
+        print(f"status={resp.status_code} bytes={len(resp.content)}")
+    except Exception as e:
+        print(f"[FETCH ERROR] {e}")
+        return None
+
+    links = set(LINK_PATTERN.findall(resp.text))
+    hits = sorted({l for l in links if any(k in l.lower() for k in GROCERY_KEYWORDS)})
+    print(f"-- Linki spożywcze znalezione: {len(hits)} --")
+    for l in hits[:30]:
+        print(f"  {l}")
+
+    if not hits:
+        return None
+    chosen = hits[0]
+    if chosen.startswith("/"):
+        chosen = "https://www.lidl.pl" + chosen
+    return chosen
 
 
 def probe_bare_api(url: str) -> None:
@@ -218,7 +256,13 @@ def main():
     for name, url in GENERIC_PAGES:
         probe(name, url)
 
-    probe_lidl_deep(LIDL_PROMO_URL)
+    probe_lidl_deep("promocje (nie-spożywcze, potwierdzenie schematu)", LIDL_PROMO_URL, max_shown=1)
+
+    grocery_url = find_grocery_link(LIDL_NAV_SOURCE_URL)
+    if grocery_url:
+        probe_lidl_deep("kategoria spożywcza", grocery_url, max_shown=5)
+    else:
+        print("\n[UWAGA] Nie znaleziono linku do kategorii spożywczej w nawigacji homepage.")
 
     for api_url in LIDL_API_CANDIDATES:
         probe_bare_api(api_url)
