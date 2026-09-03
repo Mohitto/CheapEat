@@ -286,6 +286,25 @@ def probe_biedronka_flipbook(url: str) -> None:
             print(f"\n  -- Script #{i} ({len(stripped)} znaków), zawiera słowo kluczowe --")
             print(f"  {stripped[:1500]}")
 
+            # Dla dużych bloków (prawdopodobnie pełna struktura flipbooka)
+            # szukamy dowodów na hotspoty produktowe (cena/nazwa osadzone
+            # jako dane obok współrzędnych, mimo że strona to bitmapa).
+            if len(stripped) > 5000:
+                hotspot_keywords = ["hotspot", "cena", "price", "produkt", "sku", "zł", "PLN", "title"]
+                found = {k: stripped.lower().count(k.lower()) for k in hotspot_keywords}
+                print(f"    Wystąpienia słów kluczowych w tym bloku: {found}")
+                for kw in hotspot_keywords:
+                    kidx = stripped.lower().find(kw.lower())
+                    if kidx != -1:
+                        ctx_s = max(0, kidx - 200)
+                        print(f"    -- kontekst wokół '{kw}' (offset {kidx}) --")
+                        print(f"    {stripped[ctx_s:kidx + 300]}")
+                # Też: struktura "pages" — pokaż fragment po słowie 'pages'
+                pidx = stripped.find("pages")
+                if pidx != -1:
+                    print(f"    -- kontekst wokół 'pages' (offset {pidx}) --")
+                    print(f"    {stripped[pidx:pidx + 1500]}")
+
 
 def probe_bare_api(url: str) -> None:
     print(f"\n{'='*70}")
