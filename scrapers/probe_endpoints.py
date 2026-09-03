@@ -256,13 +256,12 @@ def main():
     for name, url in GENERIC_PAGES:
         probe(name, url)
 
-    probe_lidl_deep("promocje (nie-spożywcze, potwierdzenie schematu)", LIDL_PROMO_URL, max_shown=1)
-
-    grocery_url = find_grocery_link(LIDL_NAV_SOURCE_URL)
-    if grocery_url:
-        probe_lidl_deep("kategoria spożywcza", grocery_url, max_shown=5)
-    else:
-        print("\n[UWAGA] Nie znaleziono linku do kategorii spożywczej w nawigacji homepage.")
+    # Runda 5: nawigacja zwróciła dwa linki spożywcze, ale wybór
+    # pierwszego alfabetycznie trafił w "psi-patrol-owoce-i-warzywa"
+    # (crossover z kreskówką, 0 cen) zamiast prawdziwej kategorii
+    # "zywnosc-i-napoje". Odpalam ją bezpośrednio.
+    probe_lidl_deep("żywność i napoje (prawdziwe spożywcze)",
+                     "https://www.lidl.pl/c/zywnosc-i-napoje/s10068374", max_shown=5)
 
     for api_url in LIDL_API_CANDIDATES:
         probe_bare_api(api_url)
