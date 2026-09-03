@@ -102,16 +102,17 @@ export async function getIngredientMappings(
 }
 
 /**
- * Zwraca współczynnik przeliczenia jednostek między produktem
- * a składnikiem (np. opakowanie 500g kurczaka ma factor = 5
- * żeby przeliczyć cenę na 100g).
+ * Przelicza cenę całego opakowania na cenę za 100g/100ml składnika.
+ *
+ * `conversionFactor` (z ingredient_mappings) to gramatura/pojemność
+ * opakowania podzielona przez 100 — np. opakowanie 500g kurczaka ma
+ * factor = 5.0. Cena za 100g to więc grossPrice / conversionFactor
+ * (np. kurczak 500g za 10 zł -> factor 5.0 -> 10 / 5.0 = 2 zł/100g).
  */
 export function calculateIngredientCostPer100g(
   grossPrice: number,
-  unitAmount: number, // gramów/ml w opakowaniu
   conversionFactor: number // z ingredient_mappings
 ): number {
-  if (unitAmount <= 0 || conversionFactor <= 0) return 0;
-  // cena za gram * 100 * współczynnik normalizacji
-  return (grossPrice / unitAmount) * 100 * conversionFactor;
+  if (conversionFactor <= 0) return 0;
+  return grossPrice / conversionFactor;
 }
