@@ -2,8 +2,9 @@ name: Scrape Flyers
 
 on:
   schedule:
-    # Biedronka zmienia gazetkę w środę rano — odpalamy w środę o 7:00 UTC
-    - cron: '0 7 * * 3'
+    # Codziennie o 5:00 UTC — ceny w gazetkach obu sklepów mają być
+    # aktualizowane co dzień, nie tylko raz w tygodniu.
+    - cron: '0 5 * * *'
   workflow_dispatch:  # ręczne odpalenie z GitHub UI
 
 jobs:
@@ -31,7 +32,17 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
         run: python run_all.py
+
+      - name: Upload debug dumps (surowe odpowiedzi sklepów)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-debug-${{ github.run_id }}
+          path: scrapers/debug_*.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Notify on failure
         if: failure()
