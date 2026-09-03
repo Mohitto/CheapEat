@@ -92,7 +92,7 @@ RECIPES = [
         "prep_minutes": 20,
         "ingredients": [
             ("mąka pszenna", 250, "g"),
-            ("mleko", 500, "g"),
+            ("mleko", 500, "ml"),
             ("jajka", 120, "g"),
             ("masło", 30, "g"),
             ("sól", 3, "g"),
@@ -104,7 +104,7 @@ RECIPES = [
         "prep_minutes": 10,
         "ingredients": [
             ("jajka", 180, "g"),
-            ("mleko", 50, "g"),
+            ("mleko", 50, "ml"),
             ("ser żółty", 60, "g"),
             ("masło", 15, "g"),
             ("sól", 2, "g"),
@@ -183,13 +183,19 @@ def main():
             existing = sb.table("recipe_ingredients").select("id") \
                 .eq("recipe_id", recipe_id) \
                 .eq("ingredient_id", ingredient_ids[ing_name]).limit(1).execute()
-            if not existing.data:
-                sb.table("recipe_ingredients").insert({
-                    "recipe_id": recipe_id,
-                    "ingredient_id": ingredient_ids[ing_name],
-                    "amount": amount,
-                    "unit": unit,
-                }).execute()
+            payload = {
+                "recipe_id": recipe_id,
+                "ingredient_id": ingredient_ids[ing_name],
+                "amount": amount,
+                "unit": unit,
+            }
+            if existing.data:
+                # Aktualizuj — żeby ponowne odpalenie skryptu zbiegało do
+                # aktualnej definicji (np. poprawka jednostki), a nie tylko
+                # wstawiało raz i nigdy więcej nie dotykało wiersza.
+                sb.table("recipe_ingredients").update(payload).eq("id", existing.data[0]["id"]).execute()
+            else:
+                sb.table("recipe_ingredients").insert(payload).execute()
         print(f"  {recipe['title']}")
 
     print("\nGotowe. W apce: Feed -> [TEST] ... -> sprawdź, czy liczy się koszt.")

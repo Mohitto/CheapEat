@@ -50,5 +50,19 @@ export const migrations = schemaMigrations({
         unsafeExecuteSql('DROP TABLE IF EXISTS receipt_items;'),
       ],
     },
+    {
+      // v4 -> v5: recipes zyskują image_url/category (Feed czyta teraz z
+      // lokalnej bazy zamiast bezpośrednio z Supabase, potrzebuje tych pól)
+      toVersion: 5,
+      steps: [
+        addColumns({
+          table: 'recipes',
+          columns: [
+            { name: 'image_url', type: 'string', isOptional: true },
+            { name: 'category',  type: 'string', isOptional: true },
+          ],
+        }),
+      ],
+    },
   ],
 });

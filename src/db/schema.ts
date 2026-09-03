@@ -1,7 +1,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 4,
+  version: 5,
   tables: [
 
     // ── READ-ONLY ──────────────────────────────────────────────────
@@ -100,6 +100,8 @@ export const schema = appSchema({
         { name: 'remote_id',           type: 'string', isOptional: true },
         { name: 'title',               type: 'string' },
         { name: 'source_url',          type: 'string', isOptional: true },
+        { name: 'image_url',           type: 'string', isOptional: true },
+        { name: 'category',            type: 'string', isOptional: true },
         { name: 'prep_minutes',        type: 'number', isOptional: true },
         { name: 'portions',            type: 'number' },
         { name: 'protein_per_portion', type: 'number', isOptional: true },
