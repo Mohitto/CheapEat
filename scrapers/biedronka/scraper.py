@@ -272,6 +272,7 @@ class BiedronkaScraper:
 
             if DEBUG:
                 text_lower = text.lower()
+                page_had_new_hit = False
                 for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
                     if ingredient_name in keyword_seen_on_page:
                         continue
@@ -280,9 +281,17 @@ class BiedronkaScraper:
                         if idx != -1:
                             snippet = text[max(0, idx - 40):idx + 60].replace("\n", " ")
                             keyword_seen_on_page[ingredient_name] = i
+                            page_had_new_hit = True
                             print(f"[Biedronka] Strona {i}: '{kw}' (kategoria: {ingredient_name}) w OCR -> "
                                   f"...{snippet}...")
                             break
+                if page_had_new_hit:
+                    # Pełny surowy tekst OCR strony (nie tylko 100-znakowy
+                    # fragment) — do ręcznej analizy, dlaczego regex ceny nic
+                    # nie złapał (np. cena w formacie "przy zakupie X sztuk",
+                    # nie prosta etykieta "X,XX zł").
+                    with open(f"debug_biedronka_strona_{i}.txt", "w", encoding="utf-8") as f:
+                        f.write(text)
 
             candidates = extract_price_candidates(text)
             for c in candidates:
