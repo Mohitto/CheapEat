@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Tesseract OCR (pol)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
       - name: Run all scrapers
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
