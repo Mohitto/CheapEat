@@ -8,7 +8,7 @@
  * 4. optimizeCart()         — zamienia składniki na najtańsze dostępne produkty
  */
 import database from '../model/database';
-import { getRecipeIngredients } from './recipeService';
+import { getRecipeIngredients, IGNORED_IN_COST } from './recipeService';
 import { getMappingsByIngredient } from './mappingService';
 import { getCurrentPrice } from './priceService';
 
@@ -143,6 +143,10 @@ export async function buildCartForRecipes(
       const ing = await database.get('ingredients').find(ingredientId);
       ingredientName = (ing as any).name ?? ingredientId;
     } catch {}
+
+    // Przyprawy pomijamy całkowicie w koszyku — nie liczymy kosztu i nie
+    // wliczamy ich do pokrycia/braków żadnego sklepu (patrz recipeService).
+    if (IGNORED_IN_COST.has(ingredientName)) continue;
 
     // Pobierz mapowania (posortowane priorytetem)
     const mappings = await getMappingsByIngredient(ingredientId);
