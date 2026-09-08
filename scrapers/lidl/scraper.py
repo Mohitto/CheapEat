@@ -15,6 +15,13 @@ dokładnego kształtu żądania (prawdopodobnie POST z konkretnym body).
 V1 tego scrapera celowo NIE zgaduje tego kształtu — zamiast tego parsuje
 to, co faktycznie jest w statycznym HTML (SSR), co daje mniej pozycji na
 przebieg, ale są to zawsze prawdziwe dane, nigdy zmyślone.
+
+Jedna kategoria SSR ujawnia tylko garstkę produktów (te które akurat są
+wyróżnione na stronie), więc żeby zwiększyć szansę trafienia w nasze
+kategorie, DOODKRYWAMY podkategorie spożywcze z nawigacji strony głównej
+kategorii (linki /c/.../s\\d+ zawierające słowa kluczowe typu "nabial",
+"jaja", "pieczywo", "mieso") i skanujemy też je — zamiast zgadywać ich
+URL-e na oślep.
 """
 import html as html_module
 import json
@@ -27,37 +34,23 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_scraper import get_supabase
+from ingredient_catalog import AVERAGE_UNIT_WEIGHT_G, INGREDIENT_DEFAULTS, is_plausible, match_ingredient
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
 }
 
-# Kategorie spożywcze potwierdzone/prawdopodobne na lidl.pl. Tylko pierwsza
-# jest zweryfikowana na żywo (patrz docstring); reszta to te same wzorce
-# URL co lidl.pl używa dla innych działów spożywczych — jeśli któraś nie
-# istnieje, po prostu zwróci 404 i zostanie pominięta.
-GROCERY_CATEGORY_URLS = [
-    "https://www.lidl.pl/c/zywnosc-i-napoje/s10068374",
-]
+# Punkt startowy, zweryfikowany na żywo (patrz docstring). Stąd
+# doodkrywamy podkategorie zamiast zgadywać ich URL-e.
+ROOT_GROCERY_URL = "https://www.lidl.pl/c/zywnosc-i-napoje/s10068374"
 
-# Nazwa naszego składnika -> słowa kluczowe szukane w tytule produktu.
-# Ta sama filozofia co w biedronka/scraper.py: lista mała i stała, proste
-# dopasowanie podciągu zamiast fuzzy matching.
-INGREDIENT_KEYWORDS: dict[str, list[str]] = {
-    "mąka pszenna": ["mąka pszenna", "mąka"],
-    "cukier": ["cukier"],
-    "masło": ["masło"],
-    "ryż": ["ryż"],
-    "kurczak pierś": ["pierś z kurczaka", "filet z kurczaka", "kurczak"],
-    "cebula": ["cebula"],
-    "pomidor": ["pomidor"],
-    "ser żółty": ["ser żółty", "ser gouda", "ser edamski"],
-    "olej rzepakowy": ["olej rzepakowy", "olej"],
-    "sól": ["sól"],
-    "mleko": ["mleko"],
-    "jajka": ["jajka", "jaja"],
-}
+SUBCATEGORY_LINK_PATTERN = re.compile(r'href=["\'](/c/[a-z0-9-]+/s\d+)["\']', re.IGNORECASE)
+SUBCATEGORY_KEYWORDS = [
+    "nabial", "jaj", "pieczywo", "mieso", "wedlin", "ryb", "mrozon",
+    "swiez", "napoj", "przetwor", "slodycz", "owoc", "warzyw", "nabiał",
+]
+MAX_SUBCATEGORIES = 15
 
 
 def get_or_create(sb, table: str, match: dict, defaults: dict | None = None) -> str:
@@ -96,14 +89,22 @@ def _extract_balanced_json(text: str, start_brace_idx: int) -> str | None:
     return None
 
 
-def extract_products_from_category(url: str) -> list[dict]:
-    """Zwraca listę {title, price, old_price} z produktów osadzonych w SSR
-    HTML strony kategorii (patrz docstring modułu — nie wszystkie produkty
-    z kategorii tu będą, tylko te które Lidl osadza server-side)."""
+def discover_grocery_subcategories(html: str) -> list[str]:
+    """Wyciąga linki do podkategorii spożywczych z nawigacji strony
+    kategorii — zamiast zgadywać URL-e, znajdujemy prawdziwe."""
+    links = set(SUBCATEGORY_LINK_PATTERN.findall(html))
+    matching = sorted({l for l in links if any(k in l.lower() for k in SUBCATEGORY_KEYWORDS)})
+    return ["https://www.lidl.pl" + l for l in matching[:MAX_SUBCATEGORIES]]
+
+
+def extract_products_from_category(url: str) -> tuple[list[dict], str]:
+    """Zwraca (lista {title, price, old_price} osadzonych w SSR, surowy HTML)
+    — surowy HTML jest potrzebny tylko dla strony startowej, żeby
+    doodkryć podkategorie."""
     resp = requests.get(url, headers=HEADERS, timeout=30)
     if resp.status_code != 200:
         print(f"[Lidl] {url} -> status {resp.status_code}, pomijam")
-        return []
+        return [], ""
 
     unescaped = html_module.unescape(resp.text)
     needle = '"currencyCode":"PLN"'
@@ -149,41 +150,40 @@ def extract_products_from_category(url: str) -> list[dict]:
 
         pos = idx + len(needle)
 
-    return products
-
-
-def match_ingredient(title: str) -> str | None:
-    title_lower = title.lower()
-    for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
-        if any(kw in title_lower for kw in keywords):
-            return ingredient_name
-    return None
+    return products, resp.text
 
 
 # Gramatura/objętość opakowania NIE jest ujawniana w polach JSON, które
 # widzieliśmy w SSR (patrz probe_endpoints.py) — ale polskie nazwy
 # produktów spożywczych zwyczajowo zawierają ją wprost w tytule
-# (np. "Cukier biały 1 kg", "Mleko 3,2% 1l"). Bez tego nie da się
-# BEZPIECZNIE przeliczyć ceny opakowania na cenę za 100g/ml — zgadywanie
-# stałej gramatury odtworzyłoby dokładnie ten sam błąd (absurdalne ceny),
-# który naprawiliśmy wcześniej w tej sesji. Więc: znajdź gramaturę w
-# tytule albo pomiń produkt, nigdy nie zgaduj.
-GRAMMAGE_PATTERN = re.compile(
-    r'(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b', re.IGNORECASE
-)
+# (np. "Cukier biały 1 kg", "Mleko 3,2% 1l", "Jajka 10 szt"). Bez tego nie
+# da się BEZPIECZNIE przeliczyć ceny opakowania na cenę za 100g/ml —
+# zgadywanie stałej gramatury odtworzyłoby dokładnie ten sam błąd
+# (absurdalne ceny), który naprawiliśmy wcześniej w tej sesji. Więc:
+# znajdź gramaturę/ilość w tytule albo pomiń produkt, nigdy nie zgaduj.
+GRAMMAGE_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b', re.IGNORECASE)
+COUNT_PATTERN = re.compile(r'(\d{1,2})\s*szt\b', re.IGNORECASE)
 
 
-def extract_unit_amount_grams(title: str) -> float | None:
-    """Zwraca gramaturę/objętość opakowania w gramach/ml, albo None jeśli
-    tytuł jej nie zawiera (w takim przypadku produkt trzeba pominąć)."""
+def extract_unit_amount_grams(title: str, ingredient_name: str) -> float | None:
+    """Zwraca gramaturę/objętość opakowania w gramach/ml (lub przeliczoną
+    z liczby sztuk dla kategorii typu jajka), albo None jeśli tytuł nie
+    zawiera żadnej wiarygodnej specyfikacji."""
     m = GRAMMAGE_PATTERN.search(title)
-    if not m:
-        return None
-    amount = float(m.group(1).replace(",", "."))
-    unit = m.group(2).lower()
-    if unit == "kg" or unit == "l":
-        amount *= 1000
-    return amount
+    if m:
+        amount = float(m.group(1).replace(",", "."))
+        unit = m.group(2).lower()
+        if unit == "kg" or unit == "l":
+            amount *= 1000
+        return amount
+
+    m = COUNT_PATTERN.search(title)
+    if m:
+        avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
+        if avg_weight is not None:
+            return float(m.group(1)) * avg_weight
+
+    return None
 
 
 class LidlScraper:
@@ -198,9 +198,17 @@ class LidlScraper:
         )
 
     def scrape(self) -> dict:
-        all_products = []
-        for url in GROCERY_CATEGORY_URLS:
-            products = extract_products_from_category(url)
+        all_products: list[dict] = []
+
+        root_products, root_html = extract_products_from_category(ROOT_GROCERY_URL)
+        print(f"[Lidl] {ROOT_GROCERY_URL} -> {len(root_products)} produktów osadzonych w SSR")
+        all_products.extend(root_products)
+
+        subcategory_urls = discover_grocery_subcategories(root_html)
+        print(f"[Lidl] Znaleziono {len(subcategory_urls)} podkategorii spożywczych do sprawdzenia")
+
+        for url in subcategory_urls:
+            products, _ = extract_products_from_category(url)
             print(f"[Lidl] {url} -> {len(products)} produktów osadzonych w SSR")
             all_products.extend(products)
 
@@ -225,23 +233,22 @@ class LidlScraper:
         saved = 0
 
         for ingredient_name, p in found_per_ingredient.items():
-            # Cena produktu Lidl to cena CAŁEGO opakowania, nie per-100g —
-            # w przeciwieństwie do Biedronki, gdzie gazetka podaje wprost
-            # zł/100g. Bez prawdziwej gramatury nie wolno zgadywać stałej
-            # (to odtworzyłoby dokładnie ten sam błąd absurdalnych cen,
-            # który naprawiliśmy wcześniej w tej sesji) — więc parsujemy
-            # gramaturę z tytułu produktu i POMIJAMY, jeśli jej tam nie ma.
-            unit_amount = extract_unit_amount_grams(p["title"])
+            unit_amount = extract_unit_amount_grams(p["title"], ingredient_name)
             if unit_amount is None:
-                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/objętości w nazwie, "
+                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości w nazwie, "
                       f"nie da się bezpiecznie policzyć ceny za 100g/ml")
                 continue
 
-            ing_res = self.sb.table("ingredients").select("id").eq("name", ingredient_name).limit(1).execute()
-            if not ing_res.data:
-                print(f"[Lidl] Pomijam '{ingredient_name}' — nie ma go w tabeli ingredients")
+            price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
+            if not is_plausible(ingredient_name, price_per_100):
+                print(f"[Lidl] Odrzucam nieprawdopodobną cenę: {ingredient_name} -> "
+                      f"{price_per_100} zł/100 (z '{p['title']}', {p['price']} zł za {unit_amount:g}g)")
                 continue
-            ingredient_id = ing_res.data[0]["id"]
+
+            ingredient_id = get_or_create(
+                self.sb, "ingredients", {"name": ingredient_name},
+                INGREDIENT_DEFAULTS.get(ingredient_name, {}),
+            )
 
             product_name = f"{p['title']} (Lidl)"
             store_product_id = get_or_create(
