@@ -74,6 +74,27 @@ INGREDIENT_KEYWORDS: dict[str, list[str]] = {
     "mleko": ["mleko"],
 }
 
+# OCR na stylizowanej grafice marketingowej regularnie myli się co do cyfr
+# (gubi/dodaje cyfrę, źle odczytuje przecinek) i czasem dopasowuje cenę
+# zupełnie innego produktu, który przypadkiem znalazł się w oknie kontekstu.
+# Bez sprawdzenia prawdopodobieństwa dokładnie odtworzylibyśmy błąd
+# absurdalnych cen naprawiony wcześniej w tej sesji — więc każdy kandydat
+# musi mieścić się w rozsądnym przedziale (zł za 100g/100ml), inaczej jest
+# odrzucany. Lepiej brakująca cena niż pewna siebie zła cena.
+PLAUSIBLE_RANGE_PER_100: dict[str, tuple[float, float]] = {
+    "mąka pszenna": (0.2, 1.0),
+    "cukier": (0.2, 1.0),
+    "masło": (2.0, 8.0),
+    "ryż": (0.3, 2.0),
+    "kurczak pierś": (1.2, 4.0),
+    "cebula": (0.1, 0.8),
+    "pomidor": (0.3, 2.5),
+    "ser żółty": (1.0, 6.0),
+    "olej rzepakowy": (0.5, 2.5),
+    "sól": (0.1, 0.6),
+    "mleko": (0.2, 1.0),
+}
+
 CONTEXT_WINDOW_CHARS = 200
 
 
@@ -112,7 +133,15 @@ def get_page_image_urls(uuid: str) -> list[str]:
     resp = requests.get(api_url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
     resp.raise_for_status()
     data = resp.json()
-    return [p["images"][0] for p in data["images_desktop"] if p["images"]]
+    # Niektóre strony (np. okładka) mają pustą pierwszą pozycję w "images" —
+    # bierzemy pierwszy NIEPUSTY URL, nie zakładamy że images[0] nim jest.
+    urls = []
+    for p in data["images_desktop"]:
+        for img_url in p.get("images", []):
+            if img_url:
+                urls.append(img_url)
+                break
+    return urls
 
 
 def ocr_page(image_url: str) -> str:
@@ -142,6 +171,12 @@ def extract_price_candidates(text: str) -> list[dict]:
 
             for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
                 if any(kw in context for kw in keywords):
+                    lo, hi = PLAUSIBLE_RANGE_PER_100[ingredient_name]
+                    if not (lo <= price_per_100 <= hi):
+                        print(f"[Biedronka] Odrzucam nieprawdopodobną cenę: {ingredient_name} "
+                              f"-> {price_per_100} zł/100 (surowo: {raw_price} zł/{unit_label}), "
+                              f"poza zakresem [{lo}, {hi}]")
+                        break
                     candidates.append({
                         "ingredient_name": ingredient_name,
                         "price_per_100_units": price_per_100,
