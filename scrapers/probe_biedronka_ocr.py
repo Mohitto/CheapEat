@@ -30,19 +30,25 @@ HEADERS = {
 
 GAZETKI_URL = "https://www.biedronka.pl/pl/gazetki"
 UUID_PATTERN = re.compile(r'window\.galleryLeaflet\.init\("([0-9a-f-]{36})"\)')
-PRESS_LINK_PATTERN = re.compile(r'href="(/pl/press,id,[^"]+codziennie-niskie-ceny-p[^"]*)"')
+# Nazewnictwo linków zmienia się co tydzień (np. "-p-" dla sklepów bez lady
+# tradycyjnej), więc łapiemy WSZYSTKIE linki press,id,... niezależnie od
+# reszty slugu, dowolnym stylem cudzysłowu.
+PRESS_LINK_PATTERN = re.compile(r'href=["\'](/pl/press,id,[^"\']+)["\']')
 
 
 def find_current_press_url() -> str:
     resp = requests.get(GAZETKI_URL, headers=HEADERS, timeout=30)
     print(f"[gazetki] status={resp.status_code}")
-    m = PRESS_LINK_PATTERN.search(resp.text)
-    if not m:
-        # fallback: dowolny link press,id,...
-        m = re.search(r'href="(/pl/press,id,[^"]+)"', resp.text)
-    if not m:
+    candidates = sorted(set(PRESS_LINK_PATTERN.findall(resp.text)))
+    print(f"[gazetki] Znalezione linki press,id,...: {len(candidates)}")
+    for c in candidates[:20]:
+        print(f"  {c}")
+    if not candidates:
         raise RuntimeError("Nie znaleziono linku do aktualnej gazetki na /pl/gazetki")
-    url = "https://www.biedronka.pl" + m.group(1)
+    # Preferuj wariant "codziennie-niskie-ceny" (główna gazetka spożywcza),
+    # w przeciwnym razie weź pierwszy z brzegu.
+    chosen = next((c for c in candidates if "codziennie-niskie-ceny" in c), candidates[0])
+    url = "https://www.biedronka.pl" + chosen
     print(f"[gazetki] aktualna gazetka: {url}")
     return url
 
