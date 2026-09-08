@@ -235,6 +235,11 @@ JSONLD_SCRIPT_PATTERN = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.IGNORECASE | re.DOTALL,
 )
+HTML_TAG_PATTERN = re.compile(r'<[^>]+>')
+
+
+def _strip_html_tags(html: str) -> str:
+    return HTML_TAG_PATTERN.sub(' ', html)
 
 
 def _extract_products_from_jsonld(html: str) -> list[dict]:
@@ -340,7 +345,16 @@ def extract_products_from_category(url: str) -> tuple[list[dict], str]:
 
     if not products:
         products = _extract_products_from_jsonld(resp.text)
-        if DEBUG and not products:
+        if products:
+            # JSON-LD "description"/"additionalProperty" okazały się puste
+            # na żywo — ale to strona POJEDYNCZEGO produktu (nie listy),
+            # więc bezpiecznie jest przeszukać cały widoczny tekst strony
+            # pod kątem gramatury: nie ma tu ryzyka złapania specyfikacji
+            # INNEGO produktu, jak przy stronie kategorii z wieloma kartami.
+            visible_text = _strip_html_tags(unescaped)
+            for p in products:
+                p["spec_text"] = f"{p['title']} {visible_text}"
+        elif DEBUG:
             has_plnish = "PLN" in resp.text
             has_jsonld = "application/ld+json" in resp.text
             print(f"[Lidl] {url} -> 0 produktów (SSR i JSON-LD); 'PLN' w HTML: {has_plnish}, "
@@ -364,7 +378,20 @@ COUNT_PATTERN = re.compile(r'(\d{1,2})\s*szt\b', re.IGNORECASE)
 def extract_unit_amount_grams(title: str, ingredient_name: str) -> float | None:
     """Zwraca gramaturę/objętość opakowania w gramach/ml (lub przeliczoną
     z liczby sztuk dla kategorii typu jajka), albo None jeśli tytuł nie
-    zawiera żadnej wiarygodnej specyfikacji."""
+    zawiera żadnej wiarygodnej specyfikacji.
+
+    Dla produktów sprzedawanych na sztuki (np. jajka) próbujemy najpierw
+    COUNT_PATTERN — gdy szukamy w całym widocznym tekście strony produktu
+    (nie tylko w tytule), GRAMMAGE_PATTERN mogłoby złapać pierwszą liczbę
+    z gramami z tabeli wartości odżywczych (np. "białko 12 g") zamiast
+    prawdziwej wagi opakowania; "X szt" nie występuje w takich tabelach,
+    więc jest bezpieczniejszym pierwszym wyborem tam, gdzie ma sens."""
+    avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
+    if avg_weight is not None:
+        m = COUNT_PATTERN.search(title)
+        if m:
+            return float(m.group(1)) * avg_weight
+
     m = GRAMMAGE_PATTERN.search(title)
     if m:
         amount = float(m.group(1).replace(",", "."))
@@ -372,12 +399,6 @@ def extract_unit_amount_grams(title: str, ingredient_name: str) -> float | None:
         if unit == "kg" or unit == "l":
             amount *= 1000
         return amount
-
-    m = COUNT_PATTERN.search(title)
-    if m:
-        avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
-        if avg_weight is not None:
-            return float(m.group(1)) * avg_weight
 
     return None
 
