@@ -29,13 +29,20 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta
 
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_scraper import get_supabase
-from ingredient_catalog import AVERAGE_UNIT_WEIGHT_G, INGREDIENT_DEFAULTS, is_plausible, match_ingredient
+from ingredient_catalog import (
+    AVERAGE_UNIT_WEIGHT_G,
+    INGREDIENT_DEFAULTS,
+    INGREDIENT_KEYWORDS,
+    is_plausible,
+    match_ingredient,
+)
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
 
@@ -66,6 +73,18 @@ SITEMAP_DIRECTIVE_PATTERN = re.compile(r'^Sitemap:\s*(\S+)', re.IGNORECASE | re.
 SITEMAP_LOC_PATTERN = re.compile(r'<loc>\s*([^<\s]+)\s*</loc>', re.IGNORECASE)
 CATEGORY_URL_PATTERN = re.compile(r'/c/[a-z0-9-]+/s\d+', re.IGNORECASE)
 MAX_NESTED_SITEMAPS = 5
+
+# Sprawdzone na żywo: sitemap "pages" ogłoszony w tym samym indeksie to
+# strony poradnikowe/CMS (np. "jajka-wielkanocne...-poradnik"), NIE
+# kategorie sklepowe — mimo że pasują do wzorca /c/.../sNNN, dają 0
+# produktów. Prawdziwa wartość jest w product_sitemap.xml.gz: 9000+
+# realnych stron PRODUKTOWYCH (/p/<opisowy-slug>/pNNNNN) z nazwą produktu
+# wprost w URL-u — więc zamiast zgadywać, które kategorie zawierają nasze
+# składniki, dopasowujemy słowa kluczowe bezpośrednio do sluga i odwiedzamy
+# tylko te konkretne strony produktowe.
+PRODUCT_SITEMAP_NAME_HINT = "product_sitemap"
+MAX_PRODUCT_MATCHES_PER_INGREDIENT = 3
+_POLISH_FOLD = str.maketrans({"ł": "l", "Ł": "L"})
 
 
 def get_or_create(sb, table: str, match: dict, defaults: dict | None = None) -> str:
@@ -118,6 +137,17 @@ def discover_grocery_subcategories(html: str) -> list[str]:
     return ["https://www.lidl.pl" + l for l in matching[:MAX_SUBCATEGORIES]]
 
 
+def discover_promotions_page(html: str) -> str | None:
+    """Link do strony "Promocje" (bieżące oferty całego sklepu) —
+    prawdziwy, odkryty w tej samej nawigacji co podkategorie, a nie
+    numer strony wpisany na sztywno (mógłby się kiedyś zmienić)."""
+    links = set(SUBCATEGORY_LINK_PATTERN.findall(html))
+    for l in sorted(links):
+        if "/c/promocje/" in l.lower():
+            return "https://www.lidl.pl" + l
+    return None
+
+
 def _fetch_sitemap_locs(url: str) -> list[str]:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
@@ -144,11 +174,10 @@ def _fetch_sitemap_locs(url: str) -> list[str]:
     return SITEMAP_LOC_PATTERN.findall(text)
 
 
-def discover_subcategories_from_sitemap() -> list[str]:
-    """Uzupełnienie discover_grocery_subcategories: skoro nawigacja strony
-    kategorii nie ujawnia podkategorii spożywczych w SSR HTML, sięgamy po
-    sitemap ogłoszony w robots.txt (standard sitemaps.org — nie zgadujemy
-    jego adresu) i szukamy w nim prawdziwych linków /c/.../sNNN."""
+def get_product_sitemap_urls() -> list[str]:
+    """Zwraca wszystkie prawdziwe adresy stron produktowych z
+    product_sitemap.xml.gz, ogłoszonego w robots.txt (standard
+    sitemaps.org — nie zgadujemy jego adresu) -> static/sitemap.xml."""
     try:
         robots_resp = requests.get(ROBOTS_URL, headers=HEADERS, timeout=30)
         sitemap_urls = SITEMAP_DIRECTIVE_PATTERN.findall(robots_resp.text) if robots_resp.status_code == 200 else []
@@ -158,43 +187,48 @@ def discover_subcategories_from_sitemap() -> list[str]:
     if DEBUG:
         print(f"[Lidl] robots.txt wskazuje {len(sitemap_urls)} sitemap(y): {sitemap_urls}")
 
-    category_urls: set[str] = set()
-    nested_checked = 0
-
     for sitemap_url in sitemap_urls:
-        locs = _fetch_sitemap_locs(sitemap_url)
-        if DEBUG:
-            print(f"[Lidl] {sitemap_url}: {len(locs)} wpisów <loc>")
-            for l in locs[:20]:
-                print(f"[Lidl]   wpis: {l}")
-
-        for loc in locs:
-            if CATEGORY_URL_PATTERN.search(loc):
-                category_urls.add(loc)
-
-        # Jeśli ten sitemap to indeks (wpisy same są sitemapami, nie
-        # kategoriami), sprawdź kilka pierwszych zagnieżdżonych — .xml.gz
-        # też (patrz komentarz w _fetch_sitemap_locs: to prawdziwa pułapka
-        # z poprzedniego podejścia). "sklepy" (lokalizacje sklepów) na
-        # pewno nic nam nie da, więc zostawiamy ją na koniec kolejki.
-        if not category_urls:
-            nested_candidates = [l for l in locs if l.lower().endswith((".xml", ".xml.gz"))]
-            nested_candidates.sort(key=lambda l: "sklep" in l.lower())
-            for nested_url in nested_candidates[:MAX_NESTED_SITEMAPS]:
-                if nested_checked >= MAX_NESTED_SITEMAPS:
-                    break
-                nested_checked += 1
-                nested_locs = _fetch_sitemap_locs(nested_url)
+        for nested_url in _fetch_sitemap_locs(sitemap_url)[:MAX_NESTED_SITEMAPS]:
+            if PRODUCT_SITEMAP_NAME_HINT in nested_url.lower():
+                product_urls = _fetch_sitemap_locs(nested_url)
                 if DEBUG:
-                    print(f"[Lidl] {nested_url}: {len(nested_locs)} wpisów <loc>")
-                    for l in nested_locs[:20]:
-                        print(f"[Lidl]   wpis: {l}")
-                for loc in nested_locs:
-                    if CATEGORY_URL_PATTERN.search(loc):
-                        category_urls.add(loc)
+                    print(f"[Lidl] {nested_url}: {len(product_urls)} adresów stron produktowych")
+                return product_urls
+    return []
 
-    matching = sorted({u for u in category_urls if any(k in u.lower() for k in SUBCATEGORY_KEYWORDS)})
-    return matching[:MAX_SUBCATEGORIES]
+
+def _normalize_for_slug_match(text: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '-', text.lower())
+
+
+def _slugify_keyword(kw: str) -> str:
+    """Prawdziwe URL-e Lidla są już czysto ASCII (np. "górski" -> "gorski"
+    w sitemapie), ale nasze polskie słowa kluczowe (np. "mięso mielone")
+    nie są — trzeba je najpierw ręcznie przetransliterować (ł/Ł nie
+    dekomponuje się przez NFKD, to osobna litera, nie litera+akcent) i
+    dopiero potem znormalizować spacje/myślniki tak samo jak URL-e."""
+    folded = kw.translate(_POLISH_FOLD)
+    decomposed = unicodedata.normalize("NFKD", folded)
+    ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return _normalize_for_slug_match(ascii_only)
+
+
+def match_product_urls_by_slug(product_urls: list[str]) -> dict[str, list[str]]:
+    """Dopasowuje słowa kluczowe składników bezpośrednio do sluga
+    prawdziwych stron produktowych (np. "jajka" -> ".../jajka-wiejskie-
+    .../pNNNNN") zamiast zgadywać, w której kategorii szukać. Wymaga
+    dopasowania na granicy "słowa" (otoczonego myślnikami po normalizacji),
+    żeby np. "ryż" nie złapał przypadkiem środka jakiegoś dłuższego sluga."""
+    normalized_urls = {u: f"-{_normalize_for_slug_match(u)}-" for u in product_urls}
+    matches: dict[str, list[str]] = {}
+
+    for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
+        slug_keywords = [f"-{_slugify_keyword(kw)}-" for kw in keywords]
+        found = [u for u, norm in normalized_urls.items() if any(skw in norm for skw in slug_keywords)]
+        if found:
+            matches[ingredient_name] = found[:MAX_PRODUCT_MATCHES_PER_INGREDIENT]
+
+    return matches
 
 
 def extract_products_from_category(url: str) -> tuple[list[dict], str]:
@@ -305,19 +339,30 @@ class LidlScraper:
         all_products.extend(root_products)
 
         subcategory_urls = discover_grocery_subcategories(root_html)
-        if not subcategory_urls:
-            # Nawigacja strony kategorii to globalne menu sklepu, nie
-            # zagnieżdżone podkategorie (sprawdzone na żywo) — spróbuj
-            # sitemap ogłoszonego w robots.txt zamiast poprzestać na 0.
-            subcategory_urls = discover_subcategories_from_sitemap()
-            print(f"[Lidl] Nawigacja strony nie dała podkategorii, sitemap: "
-                  f"{len(subcategory_urls)} kandydatów")
-        print(f"[Lidl] Znaleziono {len(subcategory_urls)} podkategorii spożywczych do sprawdzenia")
+        promo_url = discover_promotions_page(root_html)
+        if promo_url and promo_url not in subcategory_urls:
+            subcategory_urls.append(promo_url)
+        print(f"[Lidl] Znaleziono {len(subcategory_urls)} podkategorii/stron spożywczych do sprawdzenia")
 
         for url in subcategory_urls:
             products, _ = extract_products_from_category(url)
             print(f"[Lidl] {url} -> {len(products)} produktów osadzonych w SSR")
             all_products.extend(products)
+
+        # Nawigacja i strony CMS nie ujawniają prawdziwych podkategorii
+        # spożywczych (sprawdzone na żywo — patrz komentarz przy
+        # PRODUCT_SITEMAP_NAME_HINT) — zamiast tego dopasuj słowa kluczowe
+        # bezpośrednio do slugów 9000+ prawdziwych stron produktowych.
+        product_urls = get_product_sitemap_urls()
+        slug_matches = match_product_urls_by_slug(product_urls)
+        if DEBUG:
+            print(f"[Lidl] Dopasowania po slugu URL ({len(product_urls)} stron w sitemapie): "
+                  f"{ {k: len(v) for k, v in slug_matches.items()} }")
+        for ingredient_name, urls in slug_matches.items():
+            for url in urls:
+                products, _ = extract_products_from_category(url)
+                print(f"[Lidl] (slug: {ingredient_name}) {url} -> {len(products)} produktów osadzonych w SSR")
+                all_products.extend(products)
 
         if DEBUG:
             print(f"[Lidl] Wszystkie tytuły produktów znalezione ({len(all_products)}):")
