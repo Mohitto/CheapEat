@@ -54,6 +54,18 @@ SUBCATEGORY_KEYWORDS = [
 ]
 MAX_SUBCATEGORIES = 15
 
+# Sprawdzone na żywo: link nav na stronie /c/zywnosc-i-napoje/... to
+# globalne menu CAŁEGO sklepu (moda, ogród, dom...), nie zagnieżdżone
+# podkategorie spożywcze — SSR HTML tej strony ich po prostu nie zawiera.
+# Sitemap to osobne, publicznie opublikowane źródło prawdziwych URL-i;
+# robots.txt to standardowy (sitemaps.org), nie zgadywany sposób na
+# znalezienie jego adresu.
+ROBOTS_URL = "https://www.lidl.pl/robots.txt"
+SITEMAP_DIRECTIVE_PATTERN = re.compile(r'^Sitemap:\s*(\S+)', re.IGNORECASE | re.MULTILINE)
+SITEMAP_LOC_PATTERN = re.compile(r'<loc>\s*([^<\s]+)\s*</loc>', re.IGNORECASE)
+CATEGORY_URL_PATTERN = re.compile(r'/c/[a-z0-9-]+/s\d+', re.IGNORECASE)
+MAX_NESTED_SITEMAPS = 5
+
 
 def get_or_create(sb, table: str, match: dict, defaults: dict | None = None) -> str:
     query = sb.table(table).select("id")
@@ -103,6 +115,66 @@ def discover_grocery_subcategories(html: str) -> list[str]:
 
     matching = sorted({l for l in links if l != root_path and any(k in l.lower() for k in SUBCATEGORY_KEYWORDS)})
     return ["https://www.lidl.pl" + l for l in matching[:MAX_SUBCATEGORIES]]
+
+
+def _fetch_sitemap_locs(url: str) -> list[str]:
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+    except requests.RequestException as e:
+        print(f"[Lidl] Nie udało się pobrać {url}: {e}")
+        return []
+    if resp.status_code != 200:
+        print(f"[Lidl] {url} -> status {resp.status_code}")
+        return []
+    return SITEMAP_LOC_PATTERN.findall(resp.text)
+
+
+def discover_subcategories_from_sitemap() -> list[str]:
+    """Uzupełnienie discover_grocery_subcategories: skoro nawigacja strony
+    kategorii nie ujawnia podkategorii spożywczych w SSR HTML, sięgamy po
+    sitemap ogłoszony w robots.txt (standard sitemaps.org — nie zgadujemy
+    jego adresu) i szukamy w nim prawdziwych linków /c/.../sNNN."""
+    try:
+        robots_resp = requests.get(ROBOTS_URL, headers=HEADERS, timeout=30)
+        sitemap_urls = SITEMAP_DIRECTIVE_PATTERN.findall(robots_resp.text) if robots_resp.status_code == 200 else []
+    except requests.RequestException as e:
+        print(f"[Lidl] Nie udało się pobrać robots.txt: {e}")
+        sitemap_urls = []
+    if DEBUG:
+        print(f"[Lidl] robots.txt wskazuje {len(sitemap_urls)} sitemap(y): {sitemap_urls}")
+
+    category_urls: set[str] = set()
+    nested_checked = 0
+
+    for sitemap_url in sitemap_urls:
+        locs = _fetch_sitemap_locs(sitemap_url)
+        if DEBUG:
+            print(f"[Lidl] {sitemap_url}: {len(locs)} wpisów <loc>")
+            for l in locs[:20]:
+                print(f"[Lidl]   wpis: {l}")
+
+        for loc in locs:
+            if CATEGORY_URL_PATTERN.search(loc):
+                category_urls.add(loc)
+
+        # Jeśli ten sitemap to indeks (wpisy same są sitemapami, nie
+        # kategoriami), sprawdź kilka pierwszych zagnieżdżonych.
+        if not category_urls:
+            for nested_url in [l for l in locs if l.lower().endswith(".xml")][:MAX_NESTED_SITEMAPS]:
+                if nested_checked >= MAX_NESTED_SITEMAPS:
+                    break
+                nested_checked += 1
+                nested_locs = _fetch_sitemap_locs(nested_url)
+                if DEBUG:
+                    print(f"[Lidl] {nested_url}: {len(nested_locs)} wpisów <loc>")
+                    for l in nested_locs[:20]:
+                        print(f"[Lidl]   wpis: {l}")
+                for loc in nested_locs:
+                    if CATEGORY_URL_PATTERN.search(loc):
+                        category_urls.add(loc)
+
+    matching = sorted({u for u in category_urls if any(k in u.lower() for k in SUBCATEGORY_KEYWORDS)})
+    return matching[:MAX_SUBCATEGORIES]
 
 
 def extract_products_from_category(url: str) -> tuple[list[dict], str]:
@@ -213,6 +285,13 @@ class LidlScraper:
         all_products.extend(root_products)
 
         subcategory_urls = discover_grocery_subcategories(root_html)
+        if not subcategory_urls:
+            # Nawigacja strony kategorii to globalne menu sklepu, nie
+            # zagnieżdżone podkategorie (sprawdzone na żywo) — spróbuj
+            # sitemap ogłoszonego w robots.txt zamiast poprzestać na 0.
+            subcategory_urls = discover_subcategories_from_sitemap()
+            print(f"[Lidl] Nawigacja strony nie dała podkategorii, sitemap: "
+                  f"{len(subcategory_urls)} kandydatów")
         print(f"[Lidl] Znaleziono {len(subcategory_urls)} podkategorii spożywczych do sprawdzenia")
 
         for url in subcategory_urls:
