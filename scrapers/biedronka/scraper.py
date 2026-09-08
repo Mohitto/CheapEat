@@ -262,6 +262,14 @@ class BiedronkaScraper:
                 print(f"[Biedronka] Strona {i}: błąd OCR ({e}), pomijam")
                 continue
 
+            if DEBUG:
+                for kw in ("jaj", "jaja", "jajk"):
+                    idx = text.lower().find(kw)
+                    if idx != -1:
+                        snippet = text[max(0, idx - 40):idx + 60].replace("\n", " ")
+                        print(f"[Biedronka] Strona {i}: znaleziono '{kw}' w OCR -> ...{snippet}...")
+                        break
+
             candidates = extract_price_candidates(text)
             for c in candidates:
                 name = c["ingredient_name"]

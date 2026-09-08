@@ -36,6 +36,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_scraper import get_supabase
 from ingredient_catalog import AVERAGE_UNIT_WEIGHT_G, INGREDIENT_DEFAULTS, is_plausible, match_ingredient
 
+DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -93,7 +95,13 @@ def discover_grocery_subcategories(html: str) -> list[str]:
     """Wyciąga linki do podkategorii spożywczych z nawigacji strony
     kategorii — zamiast zgadywać URL-e, znajdujemy prawdziwe."""
     links = set(SUBCATEGORY_LINK_PATTERN.findall(html))
-    matching = sorted({l for l in links if any(k in l.lower() for k in SUBCATEGORY_KEYWORDS)})
+    root_path = ROOT_GROCERY_URL.replace("https://www.lidl.pl", "")
+    if DEBUG:
+        print(f"[Lidl] Znaleziono {len(links)} linków /c/.../sNNN łącznie na stronie startowej")
+        for l in sorted(links)[:40]:
+            print(f"[Lidl]   kandydat: {l}")
+
+    matching = sorted({l for l in links if l != root_path and any(k in l.lower() for k in SUBCATEGORY_KEYWORDS)})
     return ["https://www.lidl.pl" + l for l in matching[:MAX_SUBCATEGORIES]]
 
 
@@ -211,6 +219,11 @@ class LidlScraper:
             products, _ = extract_products_from_category(url)
             print(f"[Lidl] {url} -> {len(products)} produktów osadzonych w SSR")
             all_products.extend(products)
+
+        if DEBUG:
+            print(f"[Lidl] Wszystkie tytuły produktów znalezione ({len(all_products)}):")
+            for p in all_products:
+                print(f"[Lidl]   tytuł: {p['title']!r} ({p['price']} zł)")
 
         found_per_ingredient: dict[str, dict] = {}
         for p in all_products:
