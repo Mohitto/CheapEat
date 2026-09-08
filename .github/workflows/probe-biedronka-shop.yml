@@ -27,3 +27,8 @@ jobs:
         env:
           PYTHONUNBUFFERED: '1'
         run: python probe_biedronka_shop.py
+
+      - name: Run zakupy.biedronka.pl probe
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_biedronka_zakupy.py
