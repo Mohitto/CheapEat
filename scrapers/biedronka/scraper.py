@@ -39,7 +39,7 @@ from datetime import datetime, timedelta
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from base_scraper import get_supabase
+from base_scraper import get_or_create, get_supabase
 from ingredient_catalog import (
     AVERAGE_UNIT_WEIGHT_G,
     INGREDIENT_DEFAULTS,
@@ -80,17 +80,6 @@ PACKAGE_SPEC_PATTERNS = [
 
 CONTEXT_WINDOW_CHARS = 200
 PACKAGE_SPEC_WINDOW_CHARS = 150
-
-
-def get_or_create(sb, table: str, match: dict, defaults: dict | None = None) -> str:
-    query = sb.table(table).select("id")
-    for key, value in match.items():
-        query = query.eq(key, value)
-    res = query.limit(1).execute()
-    if res.data:
-        return res.data[0]["id"]
-    ins = sb.table(table).insert({**match, **(defaults or {})}).execute()
-    return ins.data[0]["id"]
 
 
 def find_current_press_url() -> str:

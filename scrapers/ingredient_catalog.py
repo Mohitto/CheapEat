@@ -9,6 +9,7 @@ marka ("Mała Kurka", "Zielone Pastwisko"), klasa (L/M/S) czy dokładna
 gramatura nie mają znaczenia. Każde jajko, niezależnie od marki i klasy,
 trafia w kategorię "jajka".
 """
+import re
 
 # Nazwa naszego składnika (musi istnieć w tabeli `ingredients` — patrz
 # seed_dev_data.py; scrapery dotwarzają brakujące przez get_or_create)
@@ -96,3 +97,44 @@ def match_ingredient(text: str) -> str | None:
 def is_plausible(ingredient_name: str, price_per_100: float) -> bool:
     lo, hi = PLAUSIBLE_RANGE_PER_100.get(ingredient_name, (0.0, 0.0))
     return lo <= price_per_100 <= hi
+
+
+# Gramatura/objętość opakowania NIE jest zwykle ujawniana jako osobne pole
+# strukturalne (ani w SSR-JSON Lidla, ani w data-product-gtm Biedronki) —
+# ale polskie nazwy produktów spożywczych zwyczajowo zawierają ją wprost
+# w tytule (np. "Cukier biały 1 kg", "Mleko 3,2% 1l", "Jajka 10 szt"). Bez
+# tego nie da się BEZPIECZNIE przeliczyć ceny opakowania na cenę za
+# 100g/ml — zgadywanie stałej gramatury odtworzyłoby dokładnie ten sam
+# błąd (absurdalne ceny), naprawiony wcześniej w tej sesji. Więc: znajdź
+# gramaturę/ilość w tytule albo pomiń produkt, nigdy nie zgaduj. Współdzielone
+# przez wszystkie scrapery sklepowe (Lidl, Biedronka-sklep, przyszłe).
+GRAMMAGE_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b', re.IGNORECASE)
+COUNT_PATTERN = re.compile(r'(\d{1,2})\s*szt\b', re.IGNORECASE)
+
+
+def extract_unit_amount_grams(text: str, ingredient_name: str) -> float | None:
+    """Zwraca gramaturę/objętość opakowania w gramach/ml (lub przeliczoną
+    z liczby sztuk dla kategorii typu jajka), albo None jeśli tekst nie
+    zawiera żadnej wiarygodnej specyfikacji.
+
+    Dla produktów sprzedawanych na sztuki (np. jajka) próbujemy najpierw
+    COUNT_PATTERN — gdy szukamy w całym widocznym tekście strony produktu
+    (nie tylko w tytule), GRAMMAGE_PATTERN mogłoby złapać pierwszą liczbę
+    z gramami z tabeli wartości odżywczych (np. "białko 12 g") zamiast
+    prawdziwej wagi opakowania; "X szt" nie występuje w takich tabelach,
+    więc jest bezpieczniejszym pierwszym wyborem tam, gdzie ma sens."""
+    avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
+    if avg_weight is not None:
+        m = COUNT_PATTERN.search(text)
+        if m:
+            return float(m.group(1)) * avg_weight
+
+    m = GRAMMAGE_PATTERN.search(text)
+    if m:
+        amount = float(m.group(1).replace(",", "."))
+        unit = m.group(2).lower()
+        if unit == "kg" or unit == "l":
+            amount *= 1000
+        return amount
+
+    return None

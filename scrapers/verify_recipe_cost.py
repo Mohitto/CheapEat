@@ -13,12 +13,16 @@ telefon/emulator.
 Odtworzona logika (musi zostać zsynchronizowana ręcznie, jeśli TS się
 zmieni — to jednorazowy skrypt diagnostyczny, nie część aplikacji):
 - calculateRecipeCost (recipeService.ts): dla każdego składnika przepisu
-  sprawdza WSZYSTKIE ingredient_mappings i wybiera najtańszą opcję.
+  (poza IGNORED_IN_COST, np. "sól" — te w ogóle pomijamy, bez sprawdzania
+  ceny) sprawdza WSZYSTKIE ingredient_mappings i wybiera najtańszą opcję.
+  Koszt całkowity/na porcję pokazujemy, gdy ChoCIAŻ JEDEN składnik ma
+  cenę (hasAnyCost) — nie wymagamy już 100% pokrycia (patrz commit
+  wprowadzający IGNORED_IN_COST/hasAnyCost).
 - getCurrentPrice (priceService.ts): najpierw source='flyer' z
   valid_to >= dziś, inaczej najnowszy wpis wg updated_at. Realne
-  scrapery piszą source='flyer-ocr'/'flyer-ssr' (nie dosłownie 'flyer'),
-  więc w praktyce zawsze trafia gałąź fallback — to obserwacja o
-  faktycznym zachowaniu apki, nie coś co ten skrypt naprawia.
+  scrapery piszą source='flyer-ocr'/'flyer-ssr'/'shop-regular' (nie
+  dosłownie 'flyer'), więc w praktyce zawsze trafia gałąź fallback — to
+  obserwacja o faktycznym zachowaniu apki, nie coś co ten skrypt naprawia.
 - calculateIngredientCostPer100g: grossPrice / conversionFactor.
 """
 import sys
@@ -27,6 +31,8 @@ from datetime import datetime, timezone
 from base_scraper import get_supabase
 
 sb = get_supabase()
+
+IGNORED_IN_COST = {"sól"}
 
 
 def get_current_price(store_product_id: str):
@@ -60,13 +66,17 @@ def calculate_recipe_cost(recipe_title_like: str):
     ri_res = sb.table("recipe_ingredients").select("*").eq("recipe_id", recipe["id"]).execute()
 
     total_cost = 0.0
-    has_all_prices = True
+    has_any_cost = False
     lines = []
 
     for ri in ri_res.data:
         ing_res = sb.table("ingredients").select("*").eq("id", ri["ingredient_id"]).execute()
         ingredient_name = ing_res.data[0]["name"] if ing_res.data else ri["ingredient_id"]
         amount = ri["amount"]
+
+        if ingredient_name in IGNORED_IN_COST:
+            lines.append(f"  · {ingredient_name} ({amount}{ri['unit']}): pominięty (przyprawa)")
+            continue
 
         mappings_res = sb.table("ingredient_mappings").select("*") \
             .eq("ingredient_id", ri["ingredient_id"]).order("priority").execute()
@@ -96,9 +106,9 @@ def calculate_recipe_cost(recipe_title_like: str):
                     best_store = store_info["name"] if store_info else None
 
         if best_cost is None:
-            has_all_prices = False
             lines.append(f"  ✗ {ingredient_name} ({amount}{ri['unit']}): BRAK CENY")
         else:
+            has_any_cost = True
             total_cost += best_cost
             lines.append(
                 f"  ✓ {ingredient_name} ({amount}{ri['unit']}): {best_cost:.2f} zł "
@@ -109,11 +119,11 @@ def calculate_recipe_cost(recipe_title_like: str):
         print(line)
 
     portions = recipe.get("portions") or 1
-    if has_all_prices:
-        print(f"\nKOSZT CAŁKOWITY: {round(total_cost, 2)} zł")
+    if has_any_cost:
+        print(f"\nKOSZT CAŁKOWITY (częściowy jeśli brakuje cen powyżej): {round(total_cost, 2)} zł")
         print(f"KOSZT NA PORCJĘ: {round(total_cost / portions, 2)} zł")
     else:
-        print("\nKOSZT: brak (nie wszystkie składniki mają cenę)")
+        print("\nKOSZT: brak (żaden składnik nie ma ceny)")
 
 
 if __name__ == "__main__":

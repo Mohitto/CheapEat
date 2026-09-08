@@ -35,11 +35,11 @@ from datetime import datetime, timedelta
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from base_scraper import get_supabase
+from base_scraper import get_or_create, get_supabase
 from ingredient_catalog import (
-    AVERAGE_UNIT_WEIGHT_G,
     INGREDIENT_DEFAULTS,
     INGREDIENT_KEYWORDS,
+    extract_unit_amount_grams,
     is_plausible,
     match_ingredient,
 )
@@ -85,17 +85,6 @@ MAX_NESTED_SITEMAPS = 5
 PRODUCT_SITEMAP_NAME_HINT = "product_sitemap"
 MAX_PRODUCT_MATCHES_PER_INGREDIENT = 3
 _POLISH_FOLD = str.maketrans({"ł": "l", "Ł": "L"})
-
-
-def get_or_create(sb, table: str, match: dict, defaults: dict | None = None) -> str:
-    query = sb.table(table).select("id")
-    for key, value in match.items():
-        query = query.eq(key, value)
-    res = query.limit(1).execute()
-    if res.data:
-        return res.data[0]["id"]
-    ins = sb.table(table).insert({**match, **(defaults or {})}).execute()
-    return ins.data[0]["id"]
 
 
 def _extract_balanced_json(text: str, start_brace_idx: int) -> str | None:
@@ -361,46 +350,6 @@ def extract_products_from_category(url: str) -> tuple[list[dict], str]:
                   f"'application/ld+json' w HTML: {has_jsonld}")
 
     return products, resp.text
-
-
-# Gramatura/objętość opakowania NIE jest ujawniana w polach JSON, które
-# widzieliśmy w SSR (patrz probe_endpoints.py) — ale polskie nazwy
-# produktów spożywczych zwyczajowo zawierają ją wprost w tytule
-# (np. "Cukier biały 1 kg", "Mleko 3,2% 1l", "Jajka 10 szt"). Bez tego nie
-# da się BEZPIECZNIE przeliczyć ceny opakowania na cenę za 100g/ml —
-# zgadywanie stałej gramatury odtworzyłoby dokładnie ten sam błąd
-# (absurdalne ceny), który naprawiliśmy wcześniej w tej sesji. Więc:
-# znajdź gramaturę/ilość w tytule albo pomiń produkt, nigdy nie zgaduj.
-GRAMMAGE_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b', re.IGNORECASE)
-COUNT_PATTERN = re.compile(r'(\d{1,2})\s*szt\b', re.IGNORECASE)
-
-
-def extract_unit_amount_grams(title: str, ingredient_name: str) -> float | None:
-    """Zwraca gramaturę/objętość opakowania w gramach/ml (lub przeliczoną
-    z liczby sztuk dla kategorii typu jajka), albo None jeśli tytuł nie
-    zawiera żadnej wiarygodnej specyfikacji.
-
-    Dla produktów sprzedawanych na sztuki (np. jajka) próbujemy najpierw
-    COUNT_PATTERN — gdy szukamy w całym widocznym tekście strony produktu
-    (nie tylko w tytule), GRAMMAGE_PATTERN mogłoby złapać pierwszą liczbę
-    z gramami z tabeli wartości odżywczych (np. "białko 12 g") zamiast
-    prawdziwej wagi opakowania; "X szt" nie występuje w takich tabelach,
-    więc jest bezpieczniejszym pierwszym wyborem tam, gdzie ma sens."""
-    avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
-    if avg_weight is not None:
-        m = COUNT_PATTERN.search(title)
-        if m:
-            return float(m.group(1)) * avg_weight
-
-    m = GRAMMAGE_PATTERN.search(title)
-    if m:
-        amount = float(m.group(1).replace(",", "."))
-        unit = m.group(2).lower()
-        if unit == "kg" or unit == "l":
-            amount *= 1000
-        return amount
-
-    return None
 
 
 class LidlScraper:

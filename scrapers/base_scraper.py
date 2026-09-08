@@ -12,6 +12,20 @@ def get_supabase() -> Client:
     return create_client(url, key)
 
 
+def get_or_create(sb: Client, table: str, match: dict, defaults: dict | None = None) -> str:
+    """Zwraca ID wiersza pasującego do `match` w `table`, tworząc go z
+    `defaults` jeśli jeszcze nie istnieje. Współdzielone przez wszystkie
+    scrapery sklepowe (Lidl, Biedronka gazetka, Biedronka sklep, ...)."""
+    query = sb.table(table).select("id")
+    for key, value in match.items():
+        query = query.eq(key, value)
+    res = query.limit(1).execute()
+    if res.data:
+        return res.data[0]["id"]
+    ins = sb.table(table).insert({**match, **(defaults or {})}).execute()
+    return ins.data[0]["id"]
+
+
 class BaseScraper:
     store_name: str = ""
     store_website: str = ""
