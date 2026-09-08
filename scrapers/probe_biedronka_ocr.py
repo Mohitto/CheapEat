@@ -31,9 +31,10 @@ HEADERS = {
 GAZETKI_URL = "https://www.biedronka.pl/pl/gazetki"
 UUID_PATTERN = re.compile(r'window\.galleryLeaflet\.init\("([0-9a-f-]{36})"\)')
 # Nazewnictwo linków zmienia się co tydzień (np. "-p-" dla sklepów bez lady
-# tradycyjnej), więc łapiemy WSZYSTKIE linki press,id,... niezależnie od
-# reszty slugu, dowolnym stylem cudzysłowu.
-PRESS_LINK_PATTERN = re.compile(r'href=["\'](/pl/press,id,[^"\']+)["\']')
+# tradycyjnej), a niektóre linki są względne (/pl/press,id,...) a inne
+# absolutne (https://www.biedronka.pl/pl/press,id,...) — łapiemy WSZYSTKIE,
+# niezależnie od reszty slugu i stylu cudzysłowu.
+PRESS_LINK_PATTERN = re.compile(r'href=["\'](?:https://www\.biedronka\.pl)?(/pl/press,id,[^"\']+)["\']')
 
 
 def find_current_press_url() -> str:
