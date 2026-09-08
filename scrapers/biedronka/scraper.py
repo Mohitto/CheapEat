@@ -260,6 +260,8 @@ class BiedronkaScraper:
         found_per_ingredient: dict[str, dict] = {}
 
         for i, image_url in enumerate(image_urls):
+            if DEBUG:
+                print(f"[Biedronka] Strona {i}/{len(image_urls)}: pobieram i OCR-uję...")
             try:
                 text = ocr_page(image_url)
             except Exception as e:
