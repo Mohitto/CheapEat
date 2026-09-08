@@ -37,3 +37,8 @@ jobs:
         env:
           PYTHONUNBUFFERED: '1'
         run: python probe_biedronka_category.py
+
+      - name: Probe exact product tile HTML structure
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_biedronka_tile.py
