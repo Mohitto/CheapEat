@@ -38,11 +38,22 @@ PRESS_LINK_PATTERN = re.compile(r'href=["\'](/pl/press,id,[^"\']+)["\']')
 
 def find_current_press_url() -> str:
     resp = requests.get(GAZETKI_URL, headers=HEADERS, timeout=30)
-    print(f"[gazetki] status={resp.status_code}")
+    print(f"[gazetki] status={resp.status_code} bytes={len(resp.content)}")
     candidates = sorted(set(PRESS_LINK_PATTERN.findall(resp.text)))
-    print(f"[gazetki] Znalezione linki press,id,...: {len(candidates)}")
+    print(f"[gazetki] Znalezione linki press,id,... (href=): {len(candidates)}")
     for c in candidates[:20]:
         print(f"  {c}")
+    if not candidates:
+        # Debug: szukaj samego podciągu "press,id" gdziekolwiek w HTML,
+        # niezależnie od stylu cudzysłowu/atrybutu — struktura strony
+        # mogła się zmienić między tygodniami.
+        idx = resp.text.find("press,id")
+        print(f"[debug] 'press,id' w surowym HTML na offset: {idx}")
+        if idx != -1:
+            print(resp.text[max(0, idx - 300):idx + 300])
+        else:
+            print("[debug] Pierwsze 3000 znaków strony /pl/gazetki:")
+            print(resp.text[:3000])
     if not candidates:
         raise RuntimeError("Nie znaleziono linku do aktualnej gazetki na /pl/gazetki")
     # Preferuj wariant "codziennie-niskie-ceny" (główna gazetka spożywcza),
