@@ -76,51 +76,61 @@ def find_uuid(press_url: str) -> str:
     return uuid
 
 
-def get_first_page_image(uuid: str) -> str:
+def get_page_images(uuid: str) -> dict:
+    """Zwraca {page_index: image_url} dla wszystkich stron gazetki."""
     api_url = f"https://leaflet-api.prod.biedronka.cloud/api/leaflets/{uuid}?ctx=web"
     resp = requests.get(api_url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
     data = resp.json()
-    # strona 1 (page index 1, bo page 0 bywa pusta okładka wg wcześniejszej sondy)
-    for page in data["images_desktop"]:
-        if page["page"] == 1 and page["images"]:
-            return page["images"][0]
-    # fallback: pierwsza strona z jakimkolwiek obrazkiem
+    print(f"[leaflet-api] Liczba stron: {len(data['images_desktop'])}")
+    out = {}
     for page in data["images_desktop"]:
         if page["images"]:
-            return page["images"][0]
-    raise RuntimeError("Brak obrazków stron w odpowiedzi leaflet-api")
+            out[page["page"]] = page["images"][0]
+    return out
+
+
+def ocr_page(page_num: int, image_url: str) -> None:
+    print(f"\n{'='*70}\nStrona #{page_num} -> {image_url}\n{'='*70}")
+    img_resp = requests.get(image_url, headers=HEADERS, timeout=30)
+    print(f"[image] status={img_resp.status_code} bytes={len(img_resp.content)}")
+
+    filename = f"test_page_{page_num}.png"
+    with open(filename, "wb") as f:
+        f.write(img_resp.content)
+
+    # psm 11 (sparse text, bez zakładania układu akapitów) zwykle lepiej
+    # radzi sobie z rozrzuconymi cenami/etykietami na grafice marketingowej
+    # niż domyślny psm 3 (automatyczna segmentacja stron tekstowych).
+    for psm in ("3", "11"):
+        print(f"\n[ocr] tesseract --psm {psm} (pol)...")
+        result = subprocess.run(
+            ["tesseract", filename, "stdout", "-l", "pol", "--psm", psm],
+            capture_output=True, text=True,
+        )
+        if result.stderr.strip():
+            print(f"[ocr stderr] {result.stderr[:500]}")
+        print(f"-- tekst (psm {psm}) --")
+        print(result.stdout)
+
+        price_pattern = re.compile(r'\d{1,3}[,.]\d{2}\b')
+        prices_found = price_pattern.findall(result.stdout)
+        print(f"[analiza psm {psm}] Wzorce cenowe (X,XX): {prices_found}")
 
 
 def main():
     press_url = find_current_press_url()
     uuid = find_uuid(press_url)
-    image_url = get_first_page_image(uuid)
-    print(f"\n[image] pobieram: {image_url}")
+    pages = get_page_images(uuid)
+    print(f"[pages] Dostępne indeksy stron: {sorted(pages.keys())}")
 
-    img_resp = requests.get(image_url, headers=HEADERS, timeout=30)
-    print(f"[image] status={img_resp.status_code} bytes={len(img_resp.content)}")
+    # Próbujemy kilku stron rozrzuconych po gazetce — strona 1/2 bywa
+    # okładką/hero-deal, środkowe strony to zwykle siatka produktów.
+    targets = [p for p in (2, 10, 20) if p in pages]
+    if not targets:
+        targets = list(sorted(pages.keys()))[:3]
 
-    with open("test_page.png", "wb") as f:
-        f.write(img_resp.content)
-
-    print("\n[ocr] uruchamiam tesseract (pol+eng)...")
-    result = subprocess.run(
-        ["tesseract", "test_page.png", "stdout", "-l", "pol"],
-        capture_output=True, text=True,
-    )
-    print(f"[ocr] returncode={result.returncode}")
-    if result.stderr:
-        print(f"[ocr stderr] {result.stderr[:1000]}")
-
-    print("\n" + "=" * 70)
-    print("SUROWY TEKST Z OCR:")
-    print("=" * 70)
-    print(result.stdout)
-
-    # Szukaj wzorców cenowych w wyniku OCR
-    price_pattern = re.compile(r'\d{1,3}[,.]\d{2}')
-    prices_found = price_pattern.findall(result.stdout)
-    print(f"\n[analiza] Znalezione wzorce cenowe (X,XX): {prices_found}")
+    for page_num in targets:
+        ocr_page(page_num, pages[page_num])
 
 
 if __name__ == "__main__":

@@ -36,11 +36,11 @@ jobs:
       - name: Probe Biedronka OCR feasibility
         run: python probe_biedronka_ocr.py
 
-      - name: Upload test flyer page image
+      - name: Upload test flyer page images
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: biedronka-test-page
-          path: scrapers/test_page.png
+          name: biedronka-test-pages
+          path: scrapers/test_page_*.png
           if-no-files-found: ignore
           retention-days: 7
