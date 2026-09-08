@@ -231,6 +231,46 @@ def match_product_urls_by_slug(product_urls: list[str]) -> dict[str, list[str]]:
     return matches
 
 
+JSONLD_SCRIPT_PATTERN = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_products_from_jsonld(html: str) -> list[dict]:
+    """Strony pojedynczych produktów (w przeciwieństwie do stron kategorii)
+    najwyraźniej nie osadzają tego samego wewnętrznego JSON-a co karty
+    produktów na liście (sprawdzone na żywo: 0 trafień na >20 realnych
+    stronach produktowych) — ale JSON-LD (schema.org Product/Offer) to
+    standardowy, powszechny sposób oznaczania ceny produktu w e-commerce,
+    więc sprawdzamy go jako fallback zamiast zgadywać inny wewnętrzny
+    format."""
+    products = []
+    for m in JSONLD_SCRIPT_PATTERN.finditer(html):
+        try:
+            data = json.loads(m.group(1))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for item in (data if isinstance(data, list) else [data]):
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("@type", "")
+            types = item_type if isinstance(item_type, list) else [item_type]
+            if "Product" not in types:
+                continue
+            name = item.get("name")
+            offers = item.get("offers")
+            if isinstance(offers, list):
+                offers = offers[0] if offers else None
+            if not isinstance(offers, dict):
+                continue
+            price = offers.get("price")
+            currency = offers.get("priceCurrency")
+            if name and price is not None and currency == "PLN":
+                products.append({"title": name, "price": float(price), "old_price": None})
+    return products
+
+
 def extract_products_from_category(url: str) -> tuple[list[dict], str]:
     """Zwraca (lista {title, price, old_price} osadzonych w SSR, surowy HTML)
     — surowy HTML jest potrzebny tylko dla strony startowej, żeby
@@ -283,6 +323,14 @@ def extract_products_from_category(url: str) -> tuple[list[dict], str]:
                 pass
 
         pos = idx + len(needle)
+
+    if not products:
+        products = _extract_products_from_jsonld(resp.text)
+        if DEBUG and not products:
+            has_plnish = "PLN" in resp.text
+            has_jsonld = "application/ld+json" in resp.text
+            print(f"[Lidl] {url} -> 0 produktów (SSR i JSON-LD); 'PLN' w HTML: {has_plnish}, "
+                  f"'application/ld+json' w HTML: {has_jsonld}")
 
     return products, resp.text
 
