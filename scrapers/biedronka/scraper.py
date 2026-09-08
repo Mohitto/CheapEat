@@ -289,9 +289,17 @@ class BiedronkaScraper:
                     # Pełny surowy tekst OCR strony (nie tylko 100-znakowy
                     # fragment) — do ręcznej analizy, dlaczego regex ceny nic
                     # nie złapał (np. cena w formacie "przy zakupie X sztuk",
-                    # nie prosta etykieta "X,XX zł").
+                    # nie prosta etykieta "X,XX zł"). Zapisujemy DO PLIKU
+                    # (artefakt "Upload debug dumps" — do pobrania z Actions
+                    # UI), ale też wypisujemy na stdout, bo artefakty ZIP
+                    # nie są pobieralne z tego środowiska (blokada egress na
+                    # Azure Blob Storage) — logi joba są jedynym kanałem,
+                    # który faktycznie da się tu odczytać.
                     with open(f"debug_biedronka_strona_{i}.txt", "w", encoding="utf-8") as f:
                         f.write(text)
+                    print(f"[Biedronka] === PEŁNY OCR strony {i} (nowe trafienie słowa kluczowego) ===")
+                    print(text)
+                    print(f"[Biedronka] === koniec pełnego OCR strony {i} ===")
 
             candidates = extract_price_candidates(text)
             for c in candidates:
