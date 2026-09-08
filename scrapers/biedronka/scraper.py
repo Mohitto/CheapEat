@@ -133,9 +133,13 @@ def ocr_page(image_url: str) -> str:
     tmp_path = "/tmp/biedronka_page.png"
     with open(tmp_path, "wb") as f:
         f.write(img_resp.content)
+    # Bez timeoutu tesseract potrafił wisieć w nieskończoność na
+    # niektórych stronach (zablokował cały workflow na >6h limicie joba,
+    # zamiast pominąć jedną stronę jak przy błędzie sieci — patrz
+    # obsługa wyjątków w scrape()).
     result = subprocess.run(
         ["tesseract", tmp_path, "stdout", "-l", "pol", "--psm", "3"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=60,
     )
     return result.stdout
 
