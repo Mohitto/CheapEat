@@ -26,3 +26,6 @@ jobs:
 
       - name: Probe Biedronka leaflet API
         run: python probe_biedronka_leaflet_api.py
+
+      - name: Probe Biedronka UUID resolution
+        run: python probe_biedronka_uuid.py
