@@ -71,7 +71,7 @@ export type IngredientCostLine = {
   ingredientName: string;
   amount: number;
   unit: string;
-  costPln: number | null;    // null = brak ceny w bazie
+  costPln: number | null;    // null = brak ceny w bazie (albo przyprawa, patrz IGNORED_IN_COST)
   pricePerUnit: number | null;
   storeName: string | null;  // sklep, w którym znaleziono najtańszą opcję
 };
@@ -80,18 +80,29 @@ export type RecipeCostResult = {
   recipeId: string;
   title: string;
   portions: number;
-  totalCostPln: number | null;        // null jeśli którykolwiek składnik bez ceny
+  totalCostPln: number | null;        // suma z tego co udało się wycenić; null tylko gdy NIC nie ma ceny
   costPerPortionPln: number | null;
   lines: IngredientCostLine[];
-  missingPrices: string[];            // nazwy składników bez ceny
+  missingPrices: string[];            // nazwy składników bez ceny (bez przypraw z IGNORED_IN_COST)
 };
+
+// Przyprawy/dodatki, których koszt na porcję jest pomijalny i nie da się
+// go sensownie policzyć z ceny całego opakowania (np. sól kupowana raz na
+// pół roku) — nie wymagamy dla nich ceny i nie wliczamy ich do sumy.
+// Eksportowane, żeby cartService.ts stosował tę samą regułę.
+export const IGNORED_IN_COST = new Set(['sól']);
 
 /**
  * Oblicza szacowany koszt przepisu na podstawie aktualnych cen.
- * Dla każdego składnika:
+ * Dla każdego składnika (poza przyprawami z IGNORED_IN_COST):
  * 1. Znajduje mapowania produkt-składnik
  * 2. Pobiera aktualną cenę przez getCurrentPrice
  * 3. Przelicza koszt przez calculateIngredientCostPer100g
+ *
+ * Zwraca sumę z tego, co udało się wycenić, nawet jeśli części
+ * składników brakuje ceny — brakujące są wypisane w missingPrices,
+ * żeby UI mogło pokazać "cena szacunkowa", ale liczba i tak się pojawia
+ * (usera bardziej interesuje orientacyjny koszt niż brak liczby).
  */
 export async function calculateRecipeCost(
   recipeId: string
@@ -103,7 +114,7 @@ export async function calculateRecipeCost(
   const lines: IngredientCostLine[] = [];
   const missingPrices: string[] = [];
   let totalCost = 0;
-  let hasAllPrices = true;
+  let hasAnyCost = false;
 
   for (const ri of recipeIngredients) {
     const ingredientId = (ri as any).ingredientId as string;
@@ -114,9 +125,16 @@ export async function calculateRecipeCost(
       ingredientName = (ingredient as any).name ?? ingredientId;
     } catch {}
 
+    const amount = (ri as any).amount as number;
+    const unit = (ri as any).unit;
+
+    if (IGNORED_IN_COST.has(ingredientName)) {
+      lines.push({ ingredientId, ingredientName, amount, unit, costPln: null, pricePerUnit: null, storeName: null });
+      continue;
+    }
+
     // Pobierz mapowania produkt -> składnik
     const mappings = await getIngredientMappings(ingredientId);
-    const amount = (ri as any).amount as number;
 
     let costPln: number | null = null;
     let pricePerUnit: number | null = null;
@@ -147,21 +165,13 @@ export async function calculateRecipeCost(
     }
 
     if (costPln === null) {
-      hasAllPrices = false;
       missingPrices.push(ingredientName);
     } else {
+      hasAnyCost = true;
       totalCost += costPln;
     }
 
-    lines.push({
-      ingredientId,
-      ingredientName,
-      amount,
-      unit: (ri as any).unit,
-      costPln,
-      pricePerUnit,
-      storeName,
-    });
+    lines.push({ ingredientId, ingredientName, amount, unit, costPln, pricePerUnit, storeName });
   }
 
   const portions = recipe.portions ?? 1;
@@ -170,8 +180,8 @@ export async function calculateRecipeCost(
     recipeId,
     title: recipe.title,
     portions,
-    totalCostPln: hasAllPrices ? Math.round(totalCost * 100) / 100 : null,
-    costPerPortionPln: hasAllPrices ? Math.round((totalCost / portions) * 100) / 100 : null,
+    totalCostPln: hasAnyCost ? Math.round(totalCost * 100) / 100 : null,
+    costPerPortionPln: hasAnyCost ? Math.round((totalCost / portions) * 100) / 100 : null,
     lines,
     missingPrices,
   };

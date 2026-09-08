@@ -43,6 +43,7 @@ from base_scraper import get_supabase
 from ingredient_catalog import (
     AVERAGE_UNIT_WEIGHT_G,
     INGREDIENT_DEFAULTS,
+    INGREDIENT_KEYWORDS,
     is_plausible,
     match_ingredient,
 )
@@ -258,6 +259,7 @@ class BiedronkaScraper:
         print(f"[Biedronka] Stron do przetworzenia: {len(image_urls)}")
 
         found_per_ingredient: dict[str, dict] = {}
+        keyword_seen_on_page: dict[str, int] = {}
 
         for i, image_url in enumerate(image_urls):
             if DEBUG:
@@ -269,12 +271,35 @@ class BiedronkaScraper:
                 continue
 
             if DEBUG:
-                for kw in ("jaj", "jaja", "jajk"):
-                    idx = text.lower().find(kw)
-                    if idx != -1:
-                        snippet = text[max(0, idx - 40):idx + 60].replace("\n", " ")
-                        print(f"[Biedronka] Strona {i}: znaleziono '{kw}' w OCR -> ...{snippet}...")
-                        break
+                text_lower = text.lower()
+                page_had_new_hit = False
+                for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
+                    if ingredient_name in keyword_seen_on_page:
+                        continue
+                    for kw in keywords:
+                        idx = text_lower.find(kw)
+                        if idx != -1:
+                            snippet = text[max(0, idx - 40):idx + 60].replace("\n", " ")
+                            keyword_seen_on_page[ingredient_name] = i
+                            page_had_new_hit = True
+                            print(f"[Biedronka] Strona {i}: '{kw}' (kategoria: {ingredient_name}) w OCR -> "
+                                  f"...{snippet}...")
+                            break
+                if page_had_new_hit:
+                    # Pełny surowy tekst OCR strony (nie tylko 100-znakowy
+                    # fragment) — do ręcznej analizy, dlaczego regex ceny nic
+                    # nie złapał (np. cena w formacie "przy zakupie X sztuk",
+                    # nie prosta etykieta "X,XX zł"). Zapisujemy DO PLIKU
+                    # (artefakt "Upload debug dumps" — do pobrania z Actions
+                    # UI), ale też wypisujemy na stdout, bo artefakty ZIP
+                    # nie są pobieralne z tego środowiska (blokada egress na
+                    # Azure Blob Storage) — logi joba są jedynym kanałem,
+                    # który faktycznie da się tu odczytać.
+                    with open(f"debug_biedronka_strona_{i}.txt", "w", encoding="utf-8") as f:
+                        f.write(text)
+                    print(f"[Biedronka] === PEŁNY OCR strony {i} (nowe trafienie słowa kluczowego) ===")
+                    print(text)
+                    print(f"[Biedronka] === koniec pełnego OCR strony {i} ===")
 
             candidates = extract_price_candidates(text)
             for c in candidates:
@@ -285,6 +310,15 @@ class BiedronkaScraper:
                     found_per_ingredient[name] = c
                     print(f"[Biedronka] Strona {i}: {name} -> {c['price_per_100_units']} zł/100 "
                           f"(surowo: {c['raw_price']} zł/{c['raw_unit']})")
+
+        if DEBUG:
+            missing = [name for name in INGREDIENT_KEYWORDS if name not in found_per_ingredient]
+            print(f"[Biedronka] Kategorie bez ceny w tej gazetce: {missing}")
+            print(f"[Biedronka] Kategorie których słowo kluczowe w ogóle NIE pojawiło się w OCR "
+                  f"(prawdopodobnie brak promocji w tym tygodniu): "
+                  f"{[m for m in missing if m not in keyword_seen_on_page]}")
+            print(f"[Biedronka] Kategorie których słowo kluczowe pojawiło się, ale nie wyszła cena "
+                  f"(warto zbadać ekstrakcję): {[m for m in missing if m in keyword_seen_on_page]}")
 
         saved = self._save(found_per_ingredient)
         return {"pages_scanned": len(image_urls), "ingredients_found": len(found_per_ingredient), "saved": saved}
