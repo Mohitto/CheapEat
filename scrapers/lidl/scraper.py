@@ -267,7 +267,21 @@ def _extract_products_from_jsonld(html: str) -> list[dict]:
             price = offers.get("price")
             currency = offers.get("priceCurrency")
             if name and price is not None and currency == "PLN":
-                products.append({"title": name, "price": float(price), "old_price": None})
+                # "name" sam w sobie zwykle NIE zawiera gramatury/ilości
+                # (sprawdzone na żywo: "Jaja od kur... klasa A" bez "10 szt")
+                # — doklej description/additionalProperty do przeszukania
+                # pod kątem wagi, zamiast poprzestawać na samym tytule.
+                spec_bits = [str(item.get("description") or "")]
+                for prop in item.get("additionalProperty", []) or []:
+                    if isinstance(prop, dict):
+                        spec_bits.append(str(prop.get("name") or ""))
+                        spec_bits.append(str(prop.get("value") or ""))
+                products.append({
+                    "title": name,
+                    "price": float(price),
+                    "old_price": None,
+                    "spec_text": " ".join([name, *spec_bits]),
+                })
     return products
 
 
@@ -438,10 +452,15 @@ class LidlScraper:
         saved = 0
 
         for ingredient_name, p in found_per_ingredient.items():
-            unit_amount = extract_unit_amount_grams(p["title"], ingredient_name)
+            # JSON-LD "name" produktu zwykle NIE zawiera gramatury (np.
+            # "Jaja od kur... klasa A" bez "10 szt") — spec_text (gdy
+            # dostępny) doklewa description/additionalProperty, gdzie
+            # naprawdę bywa podana ilość/waga.
+            spec_text = p.get("spec_text", p["title"])
+            unit_amount = extract_unit_amount_grams(spec_text, ingredient_name)
             if unit_amount is None:
-                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości w nazwie, "
-                      f"nie da się bezpiecznie policzyć ceny za 100g/ml")
+                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości "
+                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny za 100g/ml")
                 continue
 
             price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
