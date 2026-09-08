@@ -23,6 +23,7 @@ kategorii (linki /c/.../s\\d+ zawierające słowa kluczowe typu "nabial",
 "jaja", "pieczywo", "mieso") i skanujemy też je — zamiast zgadywać ich
 URL-e na oślep.
 """
+import gzip
 import html as html_module
 import json
 import os
@@ -126,7 +127,21 @@ def _fetch_sitemap_locs(url: str) -> list[str]:
     if resp.status_code != 200:
         print(f"[Lidl] {url} -> status {resp.status_code}")
         return []
-    return SITEMAP_LOC_PATTERN.findall(resp.text)
+    # .xml.gz to skompresowany plik (nie HTTP Content-Encoding) — trzeba
+    # ręcznie zdekompresować, inaczej regex nie znajdzie nic w binarnych
+    # bajtach gzip. To dokładnie ta pułapka, w którą wcześniej wpadliśmy:
+    # nasz filtr zagnieżdżonych sitemap sprawdzał tylko końcówkę ".xml" i
+    # cicho pomijał oba prawdziwe kandydaty (product_sitemap.xml.gz,
+    # pages_pl-PL_pl.xml.gz), zostawiając tylko nieistotny sitemap sklepów.
+    if url.lower().endswith(".gz"):
+        try:
+            text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
+        except OSError as e:
+            print(f"[Lidl] Nie udało się zdekompresować {url}: {e}")
+            return []
+    else:
+        text = resp.text
+    return SITEMAP_LOC_PATTERN.findall(text)
 
 
 def discover_subcategories_from_sitemap() -> list[str]:
@@ -158,9 +173,14 @@ def discover_subcategories_from_sitemap() -> list[str]:
                 category_urls.add(loc)
 
         # Jeśli ten sitemap to indeks (wpisy same są sitemapami, nie
-        # kategoriami), sprawdź kilka pierwszych zagnieżdżonych.
+        # kategoriami), sprawdź kilka pierwszych zagnieżdżonych — .xml.gz
+        # też (patrz komentarz w _fetch_sitemap_locs: to prawdziwa pułapka
+        # z poprzedniego podejścia). "sklepy" (lokalizacje sklepów) na
+        # pewno nic nam nie da, więc zostawiamy ją na koniec kolejki.
         if not category_urls:
-            for nested_url in [l for l in locs if l.lower().endswith(".xml")][:MAX_NESTED_SITEMAPS]:
+            nested_candidates = [l for l in locs if l.lower().endswith((".xml", ".xml.gz"))]
+            nested_candidates.sort(key=lambda l: "sklep" in l.lower())
+            for nested_url in nested_candidates[:MAX_NESTED_SITEMAPS]:
                 if nested_checked >= MAX_NESTED_SITEMAPS:
                     break
                 nested_checked += 1
