@@ -32,3 +32,8 @@ jobs:
         env:
           PYTHONUNBUFFERED: '1'
         run: python probe_biedronka_zakupy.py
+
+      - name: Probe real category pages (mleko, jaja, masło)
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_biedronka_category.py
