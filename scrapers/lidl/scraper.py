@@ -23,18 +23,28 @@ kategorii (linki /c/.../s\\d+ zawierające słowa kluczowe typu "nabial",
 "jaja", "pieczywo", "mieso") i skanujemy też je — zamiast zgadywać ich
 URL-e na oślep.
 """
+import gzip
 import html as html_module
 import json
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta
 
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_scraper import get_supabase
-from ingredient_catalog import AVERAGE_UNIT_WEIGHT_G, INGREDIENT_DEFAULTS, is_plausible, match_ingredient
+from ingredient_catalog import (
+    AVERAGE_UNIT_WEIGHT_G,
+    INGREDIENT_DEFAULTS,
+    INGREDIENT_KEYWORDS,
+    is_plausible,
+    match_ingredient,
+)
+
+DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -51,6 +61,30 @@ SUBCATEGORY_KEYWORDS = [
     "swiez", "napoj", "przetwor", "slodycz", "owoc", "warzyw", "nabiał",
 ]
 MAX_SUBCATEGORIES = 15
+
+# Sprawdzone na żywo: link nav na stronie /c/zywnosc-i-napoje/... to
+# globalne menu CAŁEGO sklepu (moda, ogród, dom...), nie zagnieżdżone
+# podkategorie spożywcze — SSR HTML tej strony ich po prostu nie zawiera.
+# Sitemap to osobne, publicznie opublikowane źródło prawdziwych URL-i;
+# robots.txt to standardowy (sitemaps.org), nie zgadywany sposób na
+# znalezienie jego adresu.
+ROBOTS_URL = "https://www.lidl.pl/robots.txt"
+SITEMAP_DIRECTIVE_PATTERN = re.compile(r'^Sitemap:\s*(\S+)', re.IGNORECASE | re.MULTILINE)
+SITEMAP_LOC_PATTERN = re.compile(r'<loc>\s*([^<\s]+)\s*</loc>', re.IGNORECASE)
+CATEGORY_URL_PATTERN = re.compile(r'/c/[a-z0-9-]+/s\d+', re.IGNORECASE)
+MAX_NESTED_SITEMAPS = 5
+
+# Sprawdzone na żywo: sitemap "pages" ogłoszony w tym samym indeksie to
+# strony poradnikowe/CMS (np. "jajka-wielkanocne...-poradnik"), NIE
+# kategorie sklepowe — mimo że pasują do wzorca /c/.../sNNN, dają 0
+# produktów. Prawdziwa wartość jest w product_sitemap.xml.gz: 9000+
+# realnych stron PRODUKTOWYCH (/p/<opisowy-slug>/pNNNNN) z nazwą produktu
+# wprost w URL-u — więc zamiast zgadywać, które kategorie zawierają nasze
+# składniki, dopasowujemy słowa kluczowe bezpośrednio do sluga i odwiedzamy
+# tylko te konkretne strony produktowe.
+PRODUCT_SITEMAP_NAME_HINT = "product_sitemap"
+MAX_PRODUCT_MATCHES_PER_INGREDIENT = 3
+_POLISH_FOLD = str.maketrans({"ł": "l", "Ł": "L"})
 
 
 def get_or_create(sb, table: str, match: dict, defaults: dict | None = None) -> str:
@@ -93,8 +127,167 @@ def discover_grocery_subcategories(html: str) -> list[str]:
     """Wyciąga linki do podkategorii spożywczych z nawigacji strony
     kategorii — zamiast zgadywać URL-e, znajdujemy prawdziwe."""
     links = set(SUBCATEGORY_LINK_PATTERN.findall(html))
-    matching = sorted({l for l in links if any(k in l.lower() for k in SUBCATEGORY_KEYWORDS)})
+    root_path = ROOT_GROCERY_URL.replace("https://www.lidl.pl", "")
+    if DEBUG:
+        print(f"[Lidl] Znaleziono {len(links)} linków /c/.../sNNN łącznie na stronie startowej")
+        for l in sorted(links)[:40]:
+            print(f"[Lidl]   kandydat: {l}")
+
+    matching = sorted({l for l in links if l != root_path and any(k in l.lower() for k in SUBCATEGORY_KEYWORDS)})
     return ["https://www.lidl.pl" + l for l in matching[:MAX_SUBCATEGORIES]]
+
+
+def discover_promotions_page(html: str) -> str | None:
+    """Link do strony "Promocje" (bieżące oferty całego sklepu) —
+    prawdziwy, odkryty w tej samej nawigacji co podkategorie, a nie
+    numer strony wpisany na sztywno (mógłby się kiedyś zmienić)."""
+    links = set(SUBCATEGORY_LINK_PATTERN.findall(html))
+    for l in sorted(links):
+        if "/c/promocje/" in l.lower():
+            return "https://www.lidl.pl" + l
+    return None
+
+
+def _fetch_sitemap_locs(url: str) -> list[str]:
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+    except requests.RequestException as e:
+        print(f"[Lidl] Nie udało się pobrać {url}: {e}")
+        return []
+    if resp.status_code != 200:
+        print(f"[Lidl] {url} -> status {resp.status_code}")
+        return []
+    # .xml.gz to skompresowany plik (nie HTTP Content-Encoding) — trzeba
+    # ręcznie zdekompresować, inaczej regex nie znajdzie nic w binarnych
+    # bajtach gzip. To dokładnie ta pułapka, w którą wcześniej wpadliśmy:
+    # nasz filtr zagnieżdżonych sitemap sprawdzał tylko końcówkę ".xml" i
+    # cicho pomijał oba prawdziwe kandydaty (product_sitemap.xml.gz,
+    # pages_pl-PL_pl.xml.gz), zostawiając tylko nieistotny sitemap sklepów.
+    if url.lower().endswith(".gz"):
+        try:
+            text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
+        except OSError as e:
+            print(f"[Lidl] Nie udało się zdekompresować {url}: {e}")
+            return []
+    else:
+        text = resp.text
+    return SITEMAP_LOC_PATTERN.findall(text)
+
+
+def get_product_sitemap_urls() -> list[str]:
+    """Zwraca wszystkie prawdziwe adresy stron produktowych z
+    product_sitemap.xml.gz, ogłoszonego w robots.txt (standard
+    sitemaps.org — nie zgadujemy jego adresu) -> static/sitemap.xml."""
+    try:
+        robots_resp = requests.get(ROBOTS_URL, headers=HEADERS, timeout=30)
+        sitemap_urls = SITEMAP_DIRECTIVE_PATTERN.findall(robots_resp.text) if robots_resp.status_code == 200 else []
+    except requests.RequestException as e:
+        print(f"[Lidl] Nie udało się pobrać robots.txt: {e}")
+        sitemap_urls = []
+    if DEBUG:
+        print(f"[Lidl] robots.txt wskazuje {len(sitemap_urls)} sitemap(y): {sitemap_urls}")
+
+    for sitemap_url in sitemap_urls:
+        for nested_url in _fetch_sitemap_locs(sitemap_url)[:MAX_NESTED_SITEMAPS]:
+            if PRODUCT_SITEMAP_NAME_HINT in nested_url.lower():
+                product_urls = _fetch_sitemap_locs(nested_url)
+                if DEBUG:
+                    print(f"[Lidl] {nested_url}: {len(product_urls)} adresów stron produktowych")
+                return product_urls
+    return []
+
+
+def _normalize_for_slug_match(text: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '-', text.lower())
+
+
+def _slugify_keyword(kw: str) -> str:
+    """Prawdziwe URL-e Lidla są już czysto ASCII (np. "górski" -> "gorski"
+    w sitemapie), ale nasze polskie słowa kluczowe (np. "mięso mielone")
+    nie są — trzeba je najpierw ręcznie przetransliterować (ł/Ł nie
+    dekomponuje się przez NFKD, to osobna litera, nie litera+akcent) i
+    dopiero potem znormalizować spacje/myślniki tak samo jak URL-e."""
+    folded = kw.translate(_POLISH_FOLD)
+    decomposed = unicodedata.normalize("NFKD", folded)
+    ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return _normalize_for_slug_match(ascii_only)
+
+
+def match_product_urls_by_slug(product_urls: list[str]) -> dict[str, list[str]]:
+    """Dopasowuje słowa kluczowe składników bezpośrednio do sluga
+    prawdziwych stron produktowych (np. "jajka" -> ".../jajka-wiejskie-
+    .../pNNNNN") zamiast zgadywać, w której kategorii szukać. Wymaga
+    dopasowania na granicy "słowa" (otoczonego myślnikami po normalizacji),
+    żeby np. "ryż" nie złapał przypadkiem środka jakiegoś dłuższego sluga."""
+    normalized_urls = {u: f"-{_normalize_for_slug_match(u)}-" for u in product_urls}
+    matches: dict[str, list[str]] = {}
+
+    for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
+        slug_keywords = [f"-{_slugify_keyword(kw)}-" for kw in keywords]
+        found = [u for u, norm in normalized_urls.items() if any(skw in norm for skw in slug_keywords)]
+        if found:
+            matches[ingredient_name] = found[:MAX_PRODUCT_MATCHES_PER_INGREDIENT]
+
+    return matches
+
+
+JSONLD_SCRIPT_PATTERN = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.IGNORECASE | re.DOTALL,
+)
+HTML_TAG_PATTERN = re.compile(r'<[^>]+>')
+
+
+def _strip_html_tags(html: str) -> str:
+    return HTML_TAG_PATTERN.sub(' ', html)
+
+
+def _extract_products_from_jsonld(html: str) -> list[dict]:
+    """Strony pojedynczych produktów (w przeciwieństwie do stron kategorii)
+    najwyraźniej nie osadzają tego samego wewnętrznego JSON-a co karty
+    produktów na liście (sprawdzone na żywo: 0 trafień na >20 realnych
+    stronach produktowych) — ale JSON-LD (schema.org Product/Offer) to
+    standardowy, powszechny sposób oznaczania ceny produktu w e-commerce,
+    więc sprawdzamy go jako fallback zamiast zgadywać inny wewnętrzny
+    format."""
+    products = []
+    for m in JSONLD_SCRIPT_PATTERN.finditer(html):
+        try:
+            data = json.loads(m.group(1))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for item in (data if isinstance(data, list) else [data]):
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("@type", "")
+            types = item_type if isinstance(item_type, list) else [item_type]
+            if "Product" not in types:
+                continue
+            name = item.get("name")
+            offers = item.get("offers")
+            if isinstance(offers, list):
+                offers = offers[0] if offers else None
+            if not isinstance(offers, dict):
+                continue
+            price = offers.get("price")
+            currency = offers.get("priceCurrency")
+            if name and price is not None and currency == "PLN":
+                # "name" sam w sobie zwykle NIE zawiera gramatury/ilości
+                # (sprawdzone na żywo: "Jaja od kur... klasa A" bez "10 szt")
+                # — doklej description/additionalProperty do przeszukania
+                # pod kątem wagi, zamiast poprzestawać na samym tytule.
+                spec_bits = [str(item.get("description") or "")]
+                for prop in item.get("additionalProperty", []) or []:
+                    if isinstance(prop, dict):
+                        spec_bits.append(str(prop.get("name") or ""))
+                        spec_bits.append(str(prop.get("value") or ""))
+                products.append({
+                    "title": name,
+                    "price": float(price),
+                    "old_price": None,
+                    "spec_text": " ".join([name, *spec_bits]),
+                })
+    return products
 
 
 def extract_products_from_category(url: str) -> tuple[list[dict], str]:
@@ -150,6 +343,23 @@ def extract_products_from_category(url: str) -> tuple[list[dict], str]:
 
         pos = idx + len(needle)
 
+    if not products:
+        products = _extract_products_from_jsonld(resp.text)
+        if products:
+            # JSON-LD "description"/"additionalProperty" okazały się puste
+            # na żywo — ale to strona POJEDYNCZEGO produktu (nie listy),
+            # więc bezpiecznie jest przeszukać cały widoczny tekst strony
+            # pod kątem gramatury: nie ma tu ryzyka złapania specyfikacji
+            # INNEGO produktu, jak przy stronie kategorii z wieloma kartami.
+            visible_text = _strip_html_tags(unescaped)
+            for p in products:
+                p["spec_text"] = f"{p['title']} {visible_text}"
+        elif DEBUG:
+            has_plnish = "PLN" in resp.text
+            has_jsonld = "application/ld+json" in resp.text
+            print(f"[Lidl] {url} -> 0 produktów (SSR i JSON-LD); 'PLN' w HTML: {has_plnish}, "
+                  f"'application/ld+json' w HTML: {has_jsonld}")
+
     return products, resp.text
 
 
@@ -168,7 +378,20 @@ COUNT_PATTERN = re.compile(r'(\d{1,2})\s*szt\b', re.IGNORECASE)
 def extract_unit_amount_grams(title: str, ingredient_name: str) -> float | None:
     """Zwraca gramaturę/objętość opakowania w gramach/ml (lub przeliczoną
     z liczby sztuk dla kategorii typu jajka), albo None jeśli tytuł nie
-    zawiera żadnej wiarygodnej specyfikacji."""
+    zawiera żadnej wiarygodnej specyfikacji.
+
+    Dla produktów sprzedawanych na sztuki (np. jajka) próbujemy najpierw
+    COUNT_PATTERN — gdy szukamy w całym widocznym tekście strony produktu
+    (nie tylko w tytule), GRAMMAGE_PATTERN mogłoby złapać pierwszą liczbę
+    z gramami z tabeli wartości odżywczych (np. "białko 12 g") zamiast
+    prawdziwej wagi opakowania; "X szt" nie występuje w takich tabelach,
+    więc jest bezpieczniejszym pierwszym wyborem tam, gdzie ma sens."""
+    avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
+    if avg_weight is not None:
+        m = COUNT_PATTERN.search(title)
+        if m:
+            return float(m.group(1)) * avg_weight
+
     m = GRAMMAGE_PATTERN.search(title)
     if m:
         amount = float(m.group(1).replace(",", "."))
@@ -176,12 +399,6 @@ def extract_unit_amount_grams(title: str, ingredient_name: str) -> float | None:
         if unit == "kg" or unit == "l":
             amount *= 1000
         return amount
-
-    m = COUNT_PATTERN.search(title)
-    if m:
-        avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
-        if avg_weight is not None:
-            return float(m.group(1)) * avg_weight
 
     return None
 
@@ -205,12 +422,35 @@ class LidlScraper:
         all_products.extend(root_products)
 
         subcategory_urls = discover_grocery_subcategories(root_html)
-        print(f"[Lidl] Znaleziono {len(subcategory_urls)} podkategorii spożywczych do sprawdzenia")
+        promo_url = discover_promotions_page(root_html)
+        if promo_url and promo_url not in subcategory_urls:
+            subcategory_urls.append(promo_url)
+        print(f"[Lidl] Znaleziono {len(subcategory_urls)} podkategorii/stron spożywczych do sprawdzenia")
 
         for url in subcategory_urls:
             products, _ = extract_products_from_category(url)
             print(f"[Lidl] {url} -> {len(products)} produktów osadzonych w SSR")
             all_products.extend(products)
+
+        # Nawigacja i strony CMS nie ujawniają prawdziwych podkategorii
+        # spożywczych (sprawdzone na żywo — patrz komentarz przy
+        # PRODUCT_SITEMAP_NAME_HINT) — zamiast tego dopasuj słowa kluczowe
+        # bezpośrednio do slugów 9000+ prawdziwych stron produktowych.
+        product_urls = get_product_sitemap_urls()
+        slug_matches = match_product_urls_by_slug(product_urls)
+        if DEBUG:
+            print(f"[Lidl] Dopasowania po slugu URL ({len(product_urls)} stron w sitemapie): "
+                  f"{ {k: len(v) for k, v in slug_matches.items()} }")
+        for ingredient_name, urls in slug_matches.items():
+            for url in urls:
+                products, _ = extract_products_from_category(url)
+                print(f"[Lidl] (slug: {ingredient_name}) {url} -> {len(products)} produktów osadzonych w SSR")
+                all_products.extend(products)
+
+        if DEBUG:
+            print(f"[Lidl] Wszystkie tytuły produktów znalezione ({len(all_products)}):")
+            for p in all_products:
+                print(f"[Lidl]   tytuł: {p['title']!r} ({p['price']} zł)")
 
         found_per_ingredient: dict[str, dict] = {}
         for p in all_products:
@@ -233,10 +473,15 @@ class LidlScraper:
         saved = 0
 
         for ingredient_name, p in found_per_ingredient.items():
-            unit_amount = extract_unit_amount_grams(p["title"], ingredient_name)
+            # JSON-LD "name" produktu zwykle NIE zawiera gramatury (np.
+            # "Jaja od kur... klasa A" bez "10 szt") — spec_text (gdy
+            # dostępny) doklewa description/additionalProperty, gdzie
+            # naprawdę bywa podana ilość/waga.
+            spec_text = p.get("spec_text", p["title"])
+            unit_amount = extract_unit_amount_grams(spec_text, ingredient_name)
             if unit_amount is None:
-                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości w nazwie, "
-                      f"nie da się bezpiecznie policzyć ceny za 100g/ml")
+                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości "
+                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny za 100g/ml")
                 continue
 
             price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)

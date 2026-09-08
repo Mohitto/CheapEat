@@ -133,9 +133,13 @@ def ocr_page(image_url: str) -> str:
     tmp_path = "/tmp/biedronka_page.png"
     with open(tmp_path, "wb") as f:
         f.write(img_resp.content)
+    # Bez timeoutu tesseract potrafił wisieć w nieskończoność na
+    # niektórych stronach (zablokował cały workflow na >6h limicie joba,
+    # zamiast pominąć jedną stronę jak przy błędzie sieci — patrz
+    # obsługa wyjątków w scrape()).
     result = subprocess.run(
         ["tesseract", tmp_path, "stdout", "-l", "pol", "--psm", "3"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=60,
     )
     return result.stdout
 
@@ -256,11 +260,21 @@ class BiedronkaScraper:
         found_per_ingredient: dict[str, dict] = {}
 
         for i, image_url in enumerate(image_urls):
+            if DEBUG:
+                print(f"[Biedronka] Strona {i}/{len(image_urls)}: pobieram i OCR-uję...")
             try:
                 text = ocr_page(image_url)
             except Exception as e:
                 print(f"[Biedronka] Strona {i}: błąd OCR ({e}), pomijam")
                 continue
+
+            if DEBUG:
+                for kw in ("jaj", "jaja", "jajk"):
+                    idx = text.lower().find(kw)
+                    if idx != -1:
+                        snippet = text[max(0, idx - 40):idx + 60].replace("\n", " ")
+                        print(f"[Biedronka] Strona {i}: znaleziono '{kw}' w OCR -> ...{snippet}...")
+                        break
 
             candidates = extract_price_candidates(text)
             for c in candidates:
