@@ -31,6 +31,28 @@ INGREDIENT_KEYWORDS: dict[str, list[str]] = {
     "jajka": ["jajka", "jajko", "jaja", "jajek", "jajami"],
 }
 
+# Skanowanie 1000+ realnych produktów sklepowych (zakupy.biedronka.pl,
+# potwierdzone na żywo) ujawniło fałszywe trafienia, których krótkie
+# słowa kluczowe powyżej nie odróżniają od prawdziwego produktu — np.
+# "Vifon Zupa błyskawiczna o smaku kurczaka" (zupa w proszku, nie pierś
+# z kurczaka), "Go Vege Masło orzechowe" (masło orzechowe, nie masło
+# mleczne), "Lisner Jajko sałatka warzywna z jajkiem" (sałatka, nie
+# jajka), "Profi Pasztet z pomidorami" (pasztet, nie pomidor). Zakres
+# is_plausible łapie część takich przypadków (cena dopasowanego
+# produktu wypada absurdalnie wysoko/nisko dla kategorii), ale nie
+# wszystkie — cena pasztetu czy sałatki jajecznej bywa przypadkowo w
+# granicach prawdopodobieństwa dla pomidora/jajek. Jeśli którekolwiek z
+# tych słów występuje w tekście, kategoria jest pomijana — lepiej
+# brakująca cena niż cena zupełnie innego produktu.
+INGREDIENT_EXCLUDE_KEYWORDS: dict[str, list[str]] = {
+    "kurczak pierś": ["zupa", "burger", "pizza", "tortilla", "kabanos",
+                       "parówk", "kiełbas", "przekąska", "sałatka", "gyros"],
+    "masło": ["orzechowe", "orzechowym"],
+    "jajka": ["sałatka", "sałatką"],
+    "pomidor": ["pasztet", "sos", "koncentrat", "pesto", "sok", "pulpa"],
+    "ryż": ["chleb", "wafle", "wafel"],
+}
+
 # Domyślne wartości odżywcze dla kategorii, których może jeszcze nie być
 # w tabeli `ingredients` (scraper tworzy brakujący wiersz przy pierwszym
 # trafieniu) — przybliżone, wystarczające do wyświetlenia w apce.
@@ -86,6 +108,8 @@ def match_ingredient(text: str) -> str | None:
     best_name = None
     best_pos = -1
     for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
+        if any(x in text_lower for x in INGREDIENT_EXCLUDE_KEYWORDS.get(ingredient_name, ())):
+            continue
         for kw in keywords:
             pos = text_lower.rfind(kw)
             if pos > best_pos:

@@ -142,15 +142,35 @@ class BiedronkaShopScraper:
             print(f"[Biedronka-sklep] {url} -> {len(products)} produktów")
             all_products.extend(products)
 
+        # Porównanie "najtańszej" opcji na SUROWEJ cenie opakowania (bez
+        # przeliczenia na 100g/ml) dawało błędne wyniki na żywo — np. dla
+        # "mleko" wygrywał mały słoiczek mleka zsiadłego 400g za 1,99 zł
+        # zamiast prawdziwego mleka 1l za 3,49 zł, mimo że to drugie jest
+        # tańsze per 100ml. Trzeba znać gramaturę PRZED porównaniem, nie
+        # po wybraniu "najtańszego" kandydata.
         found_per_ingredient: dict[str, dict] = {}
         for p in all_products:
             ingredient_name = match_ingredient(p["name"])
             if not ingredient_name:
                 continue
+
+            unit_amount = extract_unit_amount_grams(p["name"], ingredient_name)
+            if unit_amount is None:
+                # Mnóstwo produktów (zwłaszcza świeże mięso/warzywa sprzedawane
+                # "za kg" bez podanej wagi opakowania w nazwie) nie da się
+                # bezpiecznie przeliczyć — zbyt liczne, by logować każdy bez DEBUG.
+                if DEBUG:
+                    print(f"[Biedronka-sklep] Pomijam '{p['name']}' — brak gramatury/ilości w nazwie")
+                continue
+
+            price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
             if DEBUG:
-                print(f"[Biedronka-sklep] Dopasowano '{p['name']}' -> {ingredient_name} ({p['price']} zł)")
-            if ingredient_name not in found_per_ingredient or p["price"] < found_per_ingredient[ingredient_name]["price"]:
-                found_per_ingredient[ingredient_name] = p
+                print(f"[Biedronka-sklep] Dopasowano '{p['name']}' -> {ingredient_name} "
+                      f"({p['price']} zł, {price_per_100} zł/100)")
+
+            candidate = {**p, "unit_amount": unit_amount, "price_per_100": price_per_100}
+            if ingredient_name not in found_per_ingredient or price_per_100 < found_per_ingredient[ingredient_name]["price_per_100"]:
+                found_per_ingredient[ingredient_name] = candidate
 
         saved = self._save(found_per_ingredient)
         return {
@@ -172,13 +192,8 @@ class BiedronkaShopScraper:
         saved = 0
 
         for ingredient_name, p in found_per_ingredient.items():
-            unit_amount = extract_unit_amount_grams(p["name"], ingredient_name)
-            if unit_amount is None:
-                print(f"[Biedronka-sklep] Pomijam '{p['name']}' — nie znaleziono gramatury/ilości "
-                      f"w nazwie, nie da się bezpiecznie policzyć ceny za 100g/ml")
-                continue
-
-            price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
+            unit_amount = p["unit_amount"]
+            price_per_100 = p["price_per_100"]
             if not is_plausible(ingredient_name, price_per_100):
                 print(f"[Biedronka-sklep] Odrzucam nieprawdopodobną cenę: {ingredient_name} -> "
                       f"{price_per_100} zł/100 (z '{p['name']}', {p['price']} zł za {unit_amount:g}g)")

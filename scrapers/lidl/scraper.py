@@ -401,14 +401,37 @@ class LidlScraper:
             for p in all_products:
                 print(f"[Lidl]   tytuł: {p['title']!r} ({p['price']} zł)")
 
+        # Porównanie "najtańszej" opcji MUSI odbywać się na cenie za 100g/ml,
+        # nie na surowej cenie opakowania — inaczej mały słoiczek za 2 zł
+        # wygrywa z dużym opakowaniem za 4 zł, mimo że w przeliczeniu na
+        # 100g jest droższy. To dokładnie ten sam błąd (nieprzeliczona
+        # cena), który naprawiliśmy wcześniej w tej sesji dla wzoru
+        # kosztu — tu wypłynął na żywo przy testowaniu Biedronka-sklep
+        # (patrz shop_scraper.py), więc naprawiony identycznie tutaj.
         found_per_ingredient: dict[str, dict] = {}
         for p in all_products:
             ingredient_name = match_ingredient(p["title"])
             if not ingredient_name:
                 continue
-            print(f"[Lidl] Dopasowano '{p['title']}' -> {ingredient_name} ({p['price']} zł)")
-            if ingredient_name not in found_per_ingredient or p["price"] < found_per_ingredient[ingredient_name]["price"]:
-                found_per_ingredient[ingredient_name] = p
+
+            # JSON-LD "name" produktu zwykle NIE zawiera gramatury (np.
+            # "Jaja od kur... klasa A" bez "10 szt") — spec_text (gdy
+            # dostępny) doklewa description/additionalProperty, gdzie
+            # naprawdę bywa podana ilość/waga.
+            spec_text = p.get("spec_text", p["title"])
+            unit_amount = extract_unit_amount_grams(spec_text, ingredient_name)
+            if unit_amount is None:
+                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości "
+                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny za 100g/ml")
+                continue
+
+            price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
+            print(f"[Lidl] Dopasowano '{p['title']}' -> {ingredient_name} "
+                  f"({p['price']} zł, {price_per_100} zł/100)")
+
+            candidate = {**p, "unit_amount": unit_amount, "price_per_100": price_per_100}
+            if ingredient_name not in found_per_ingredient or price_per_100 < found_per_ingredient[ingredient_name]["price_per_100"]:
+                found_per_ingredient[ingredient_name] = candidate
 
         saved = self._save(found_per_ingredient)
         return {"products_seen": len(all_products), "ingredients_found": len(found_per_ingredient), "saved": saved}
@@ -422,18 +445,8 @@ class LidlScraper:
         saved = 0
 
         for ingredient_name, p in found_per_ingredient.items():
-            # JSON-LD "name" produktu zwykle NIE zawiera gramatury (np.
-            # "Jaja od kur... klasa A" bez "10 szt") — spec_text (gdy
-            # dostępny) doklewa description/additionalProperty, gdzie
-            # naprawdę bywa podana ilość/waga.
-            spec_text = p.get("spec_text", p["title"])
-            unit_amount = extract_unit_amount_grams(spec_text, ingredient_name)
-            if unit_amount is None:
-                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości "
-                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny za 100g/ml")
-                continue
-
-            price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
+            unit_amount = p["unit_amount"]
+            price_per_100 = p["price_per_100"]
             if not is_plausible(ingredient_name, price_per_100):
                 print(f"[Lidl] Odrzucam nieprawdopodobną cenę: {ingredient_name} -> "
                       f"{price_per_100} zł/100 (z '{p['title']}', {p['price']} zł za {unit_amount:g}g)")
