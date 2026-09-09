@@ -69,6 +69,10 @@ INGREDIENT_DEFAULTS: dict[str, dict] = {
 INGREDIENT_UNIT: dict[str, str] = {
     "jajka": "szt",
     "mleko": "ml",
+    # Olej sprzedaje się w litrach, nie na wagę — przy jednostce "g"
+    # gazetkowe "1 l" było odrzucane jako niezgodna jednostka i realna
+    # promocja (4,49 zł za litr) przepadała.
+    "olej rzepakowy": "ml",
 }
 
 

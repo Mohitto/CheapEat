@@ -122,6 +122,18 @@ class BiedronkaScraper:
                     continue
 
                 pages_scanned += 1
+
+                # Gazetki tematyczne są krótkie, a to w nich siedzą promocje
+                # na nasze składniki (nabiał, mięso). Gdy z takiej strony nic
+                # nie wyciągniemy, chcemy zobaczyć, co OCR w ogóle odczytał —
+                # bez tego nie da się stwierdzić, czy zawiodło rozpoznanie
+                # tekstu, czy dopasowanie ceny do nazwy.
+                if DEBUG and len(image_urls) <= 4:
+                    interesting = [t for t in tokens if len(t.text) > 2 or t.text.isdigit()]
+                    print(f"[Biedronka] {flyer['slug']} s.{i}: OCR odczytał "
+                          f"{len(tokens)} słów; treść: "
+                          f"{' | '.join(t.text for t in interesting[:120])}")
+
                 for c in extract_candidates(tokens, page_width, debug=DEBUG):
                     name = c["ingredient_name"]
                     # Ten sam składnik potrafi być w kilku gazetkach naraz —

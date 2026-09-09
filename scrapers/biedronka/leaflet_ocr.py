@@ -149,8 +149,15 @@ def find_prices(tokens: list[Token], page_width: int) -> list[tuple[Token, float
 
 
 # Cena z dopiskiem "/kg", "/l", "/100 g" to cena JEDNOSTKOWA podana obok
-# ceny opakowania — nie wolno jej wziąć za kwotę do zapłaty.
-UNIT_PRICE_SUFFIX = re.compile(r'^/?\s*(kg|l|szt|100)\b', re.IGNORECASE)
+# ceny opakowania — nie wolno jej wziąć za kwotę do zapłaty. OCR skleja
+# ten dopisek na różne sposoby ("zł/kg", "zl/kg", "/kg", "kg"), a bywa i
+# tak, że cała cena jednostkowa wychodzi jednym tokenem ("199,50zł/kg"),
+# stąd dwa wzorce zamiast jednego.
+# Tylko formy z ukośnikiem: samo "kg"/"l" obok ceny bywa gramaturą
+# produktu ("1 kg"), a OCR myli "1" z "l", więc bez ukośnika łatwo
+# uznalibyśmy zwykłą cenę opakowania za cenę za kilogram.
+UNIT_PRICE_SUFFIX = re.compile(r'^(z[łl])?\s*/\s*(kg|l|szt|100)\b', re.IGNORECASE)
+UNIT_PRICE_INLINE = re.compile(r'\d\s*(z[łl])?\s*/\s*(kg|l|szt|100)\b', re.IGNORECASE)
 # Gramatura jako jeden token ("500g") albo dwa ("500" + "g").
 SPEC_ONE_TOKEN = re.compile(r'^(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l|szt)\.?$', re.IGNORECASE)
 SPEC_NUMBER = re.compile(r'^\d+(?:[.,]\d+)?$')
@@ -200,6 +207,12 @@ def _find_specs(tokens: list[Token], page_width: int) -> list[tuple[Token, str, 
 
 
 def _is_unit_price(price_token: Token, tokens: list[Token], page_width: int) -> bool:
+    """Czy ta cena to cena za kilogram/litr podana drobnym drukiem obok
+    ceny opakowania. Brana za kwotę do zapłaty produkowała absurdy w
+    rodzaju "masło 54,90 zł" (to była cena za kg) czy "jajka 199,50 zł"."""
+    if UNIT_PRICE_INLINE.search(price_token.text):
+        return True
+
     max_gap = page_width * 0.05
     for t in tokens:
         if t is price_token or not UNIT_PRICE_SUFFIX.match(t.text):
