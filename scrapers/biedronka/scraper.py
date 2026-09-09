@@ -39,13 +39,14 @@ from datetime import datetime, timedelta
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from base_scraper import get_or_create, get_supabase
+from base_scraper import get_or_create, get_supabase, replace_price
 from ingredient_catalog import (
-    AVERAGE_UNIT_WEIGHT_G,
     INGREDIENT_DEFAULTS,
     INGREDIENT_KEYWORDS,
     is_plausible,
     match_ingredient,
+    unit_for,
+    unit_price_of,
 )
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
@@ -156,11 +157,21 @@ def _nearest_package_spec(text: str, price_pos: int) -> tuple[float | None, str 
 
 
 def extract_price_candidates(text: str) -> list[dict]:
-    """Zwraca listę {ingredient_name, price_per_100_units, raw_price, raw_unit}
-    dla każdego rozpoznanego i wiarygodnego dopasowania."""
+    """Zwraca listę kandydatów {ingredient_name, package_price, unit,
+    unit_amount, unit_price} dla każdego rozpoznanego i wiarygodnego
+    dopasowania.
+
+    `package_price` to kwota, którą realnie płaci się przy kasie za jedno
+    opakowanie — nie cena przeliczona na 100 g. Wcześniej zapisywaliśmy
+    tylko tę przeliczoną i gubiliśmy rozmiar opakowania, więc promocja
+    "kostka masła 2,50 zł" trafiała do bazy jako sztuczne opakowanie 100 g
+    z ceną za 100 g i nie dawało się jej pokazać jako realnego kosztu.
+    """
     candidates = []
 
-    # --- 1) Jawna cena za jednostkę ---
+    # --- 1) Jawna cena za jednostkę ("X zł/100 g", "/kg", "/l") ---
+    # Tu gazetka NIE podaje rozmiaru opakowania, więc zapisujemy uczciwie
+    # to, co wiemy: porcję 100 g/ml w tej cenie.
     for pattern, unit_label, to_100_factor in EXPLICIT_UNIT_PRICE_PATTERNS:
         for m in pattern.finditer(text):
             raw_price = float(m.group(1).replace(",", "."))
@@ -172,6 +183,10 @@ def extract_price_candidates(text: str) -> list[dict]:
             if not ingredient_name:
                 continue
 
+            base_unit = unit_for(ingredient_name)
+            if base_unit == "szt":
+                continue  # cena za 100 g nic nie mówi o cenie sztuki
+
             if not is_plausible(ingredient_name, price_per_100):
                 print(f"[Biedronka] Odrzucam nieprawdopodobną cenę: {ingredient_name} "
                       f"-> {price_per_100} zł/100 (surowo: {raw_price} zł/{unit_label})")
@@ -179,9 +194,10 @@ def extract_price_candidates(text: str) -> list[dict]:
 
             candidates.append({
                 "ingredient_name": ingredient_name,
-                "price_per_100_units": price_per_100,
-                "raw_price": raw_price,
-                "raw_unit": unit_label,
+                "package_price": price_per_100,
+                "unit": base_unit,
+                "unit_amount": 100.0,
+                "unit_price": price_per_100,
             })
 
     # --- 2) Cena za opakowanie + znaleziona w pobliżu gramatura/ilość ---
@@ -195,34 +211,31 @@ def extract_price_candidates(text: str) -> list[dict]:
             continue
 
         raw_amount, unit_label, _ = _nearest_package_spec(text, m.start())
-        if raw_amount is None:
+        if raw_amount is None or raw_amount <= 0:
             continue  # bez wiarygodnej gramatury/ilości nie zgadujemy
 
         if unit_label == "szt":
-            avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
-            if avg_weight is None:
-                continue  # nie znamy średniej wagi sztuki dla tej kategorii
-            unit_amount_g = raw_amount * avg_weight
+            unit, unit_amount = "szt", raw_amount
         elif unit_label == "kg":
-            unit_amount_g = raw_amount * 1000.0
-        else:  # "g" lub "ml" — już w jednostce bazowej
-            unit_amount_g = raw_amount
+            unit, unit_amount = "g", raw_amount * 1000.0
+        else:  # "g" albo "ml"
+            unit, unit_amount = unit_label, raw_amount
 
-        if unit_amount_g <= 0:
-            continue
+        unit_price = unit_price_of(ingredient_name, raw_price, unit, unit_amount)
+        if unit_price is None:
+            continue  # opakowanie w innej jednostce niż liczymy ten składnik
 
-        price_per_100 = round(raw_price / (unit_amount_g / 100.0), 4)
-
-        if not is_plausible(ingredient_name, price_per_100):
+        if not is_plausible(ingredient_name, unit_price):
             print(f"[Biedronka] Odrzucam nieprawdopodobną cenę (opakowanie): {ingredient_name} "
-                  f"-> {price_per_100} zł/100 (surowo: {raw_price} zł za {raw_amount} {unit_label})")
+                  f"-> {round(unit_price, 4)} zł/j. (surowo: {raw_price} zł za {raw_amount:g} {unit_label})")
             continue
 
         candidates.append({
             "ingredient_name": ingredient_name,
-            "price_per_100_units": price_per_100,
-            "raw_price": raw_price,
-            "raw_unit": f"{raw_amount:g}{unit_label}",
+            "package_price": raw_price,
+            "unit": unit,
+            "unit_amount": unit_amount,
+            "unit_price": unit_price,
         })
 
     return candidates
@@ -295,10 +308,10 @@ class BiedronkaScraper:
                 name = c["ingredient_name"]
                 # Jeśli kilka stron trafia w ten sam składnik, zostaw najtańszą
                 # (typowe zachowanie promocji — najniższa widoczna cena wygrywa).
-                if name not in found_per_ingredient or c["price_per_100_units"] < found_per_ingredient[name]["price_per_100_units"]:
+                if name not in found_per_ingredient or c["unit_price"] < found_per_ingredient[name]["unit_price"]:
                     found_per_ingredient[name] = c
-                    print(f"[Biedronka] Strona {i}: {name} -> {c['price_per_100_units']} zł/100 "
-                          f"(surowo: {c['raw_price']} zł/{c['raw_unit']})")
+                    print(f"[Biedronka] Strona {i}: {name} -> {c['package_price']} zł "
+                          f"za {c['unit_amount']:g}{c['unit']} ({round(c['unit_price'], 4)} zł/j.)")
 
         if DEBUG:
             missing = [name for name in INGREDIENT_KEYWORDS if name not in found_per_ingredient]
@@ -321,6 +334,8 @@ class BiedronkaScraper:
         saved = 0
 
         for ingredient_name, c in found_per_ingredient.items():
+            unit, unit_amount = c["unit"], c["unit_amount"]
+
             ingredient_id = get_or_create(
                 self.sb, "ingredients", {"name": ingredient_name},
                 INGREDIENT_DEFAULTS.get(ingredient_name, {}),
@@ -330,16 +345,17 @@ class BiedronkaScraper:
             store_product_id = get_or_create(
                 self.sb, "store_products",
                 {"store_id": self.store_id, "name": product_name},
-                {"unit": "g", "unit_amount": 100},
+                {"unit": unit, "unit_amount": unit_amount},
             )
+            # Promocja w kolejnej gazetce bywa na innym opakowaniu niż
+            # poprzednia (raz kostka 200 g, raz 300 g) — cena bez aktualnej
+            # gramatury byłaby policzona wobec starego opakowania.
+            self.sb.table("store_products").update(
+                {"unit": unit, "unit_amount": unit_amount}
+            ).eq("id", store_product_id).execute()
 
-            self.sb.table("prices").insert({
-                "store_product_id": store_product_id,
-                "gross_price": c["price_per_100_units"],
-                "source": "flyer-ocr",
-                "valid_from": today,
-                "valid_to": valid_to,
-            }).execute()
+            replace_price(self.sb, store_product_id, "flyer-ocr",
+                          c["package_price"], today, valid_to)
 
             existing_mapping = self.sb.table("ingredient_mappings").select("id") \
                 .eq("ingredient_id", ingredient_id) \
@@ -348,7 +364,7 @@ class BiedronkaScraper:
                 self.sb.table("ingredient_mappings").insert({
                     "ingredient_id": ingredient_id,
                     "store_product_id": store_product_id,
-                    "conversion_factor": 1.0,
+                    "conversion_factor": round(unit_amount / 100, 4),
                     "priority": 5,
                 }).execute()
 

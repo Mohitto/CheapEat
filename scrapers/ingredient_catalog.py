@@ -61,16 +61,32 @@ INGREDIENT_DEFAULTS: dict[str, dict] = {
     "jajka": {"protein_per_100g": 12.5, "kcal_per_100g": 143},
 }
 
-# Rozsądny przedział ceny za 100g/100ml dla każdej kategorii. OCR i
-# dopasowanie kontekstu regularnie się mylą (zgubiona cyfra, zły
-# przecinek, cena sąsiedniego produktu w oknie kontekstu) — dopasowanie
+# Jednostka, w której NAPRAWDĘ kupuje się dany składnik. Domyślnie waga
+# ("g") lub objętość ("ml"), ale część produktów sprzedaje się wyłącznie
+# na sztuki — jajek nikt nie kupuje na gramy, więc przeliczanie ich przez
+# zmyśloną średnią wagę sztuki (i pokazywanie "120 g jajek") było błędem.
+# Sklep sam podaje to wprost, np. "10szt. - 1,40 zł / szt".
+INGREDIENT_UNIT: dict[str, str] = {
+    "jajka": "szt",
+    "mleko": "ml",
+}
+
+
+def unit_for(ingredient_name: str) -> str:
+    """Jednostka bazowa składnika: 'szt', 'ml' albo (domyślnie) 'g'."""
+    return INGREDIENT_UNIT.get(ingredient_name, "g")
+
+# Rozsądny przedział ceny jednostkowej dla każdej kategorii: za 100g/100ml
+# dla składników ważonych, a za 1 SZTUKĘ dla tych z INGREDIENT_UNIT == "szt"
+# (jajka). OCR i dopasowanie kontekstu regularnie się mylą (zgubiona cyfra,
+# zły przecinek, cena sąsiedniego produktu w oknie kontekstu) — dopasowanie
 # spoza tego zakresu jest ODRZUCANE. Lepiej brakująca cena niż pewna
 # siebie zła cena (patrz historia tej sesji: dokładnie ten błąd
 # naprawialiśmy dla wzoru matematycznego, teraz naprawiamy dla OCR).
-PLAUSIBLE_RANGE_PER_100: dict[str, tuple[float, float]] = {
-    "mąka pszenna": (0.2, 1.0),
-    "cukier": (0.2, 1.0),
-    "masło": (2.0, 8.0),
+PLAUSIBLE_UNIT_PRICE: dict[str, tuple[float, float]] = {
+    "mąka pszenna": (0.1, 1.0),
+    "cukier": (0.1, 1.0),
+    "masło": (1.0, 8.0),
     "ryż": (0.3, 2.0),
     "kurczak pierś": (1.2, 4.0),
     "mięso mielone": (1.0, 3.5),
@@ -80,15 +96,9 @@ PLAUSIBLE_RANGE_PER_100: dict[str, tuple[float, float]] = {
     "olej rzepakowy": (0.5, 2.5),
     "sól": (0.1, 0.6),
     "mleko": (0.2, 1.0),
-    "jajka": (0.8, 4.0),
-}
-
-# Średnia waga sztuki [g] dla produktów liczonych na sztuki, nie na wagę
-# (np. "10 szt jajek za X zł") — potrzebne żeby przeliczyć na cenę za
-# 100g. Przybliżenie (prawdziwa waga zależy od klasy L/M/S), ale
-# wystarczające przy filtrze prawdopodobieństwa powyżej.
-AVERAGE_UNIT_WEIGHT_G: dict[str, float] = {
-    "jajka": 60.0,
+    # za 1 sztukę, nie za 100 g — realne ceny w sklepie to 1,35-1,60 zł/szt,
+    # w promocji potrafi zejść poniżej złotówki.
+    "jajka": (0.4, 3.0),
 }
 
 
@@ -118,9 +128,24 @@ def match_ingredient(text: str) -> str | None:
     return best_name
 
 
-def is_plausible(ingredient_name: str, price_per_100: float) -> bool:
-    lo, hi = PLAUSIBLE_RANGE_PER_100.get(ingredient_name, (0.0, 0.0))
-    return lo <= price_per_100 <= hi
+def is_plausible(ingredient_name: str, unit_price: float) -> bool:
+    """`unit_price` w jednostce bazowej składnika: zł/100g, zł/100ml
+    albo zł/szt (patrz INGREDIENT_UNIT i PLAUSIBLE_UNIT_PRICE)."""
+    lo, hi = PLAUSIBLE_UNIT_PRICE.get(ingredient_name, (0.0, 0.0))
+    return lo <= unit_price <= hi
+
+
+def unit_price_of(ingredient_name: str, package_price: float,
+                  unit: str, unit_amount: float) -> float | None:
+    """Cena jednostkowa opakowania w jednostce bazowej składnika —
+    do porównywania opakowań różnej wielkości i do is_plausible.
+    Zwraca None, gdy jednostka opakowania nie pasuje do składnika
+    (np. mięso na sztuki), bo wtedy nie ma bezpiecznego przelicznika."""
+    if unit_amount <= 0 or unit != unit_for(ingredient_name):
+        return None
+    if unit == "szt":
+        return package_price / unit_amount          # zł za sztukę
+    return package_price / (unit_amount / 100.0)    # zł za 100 g/ml
 
 
 # Gramatura/objętość opakowania NIE jest zwykle ujawniana jako osobne pole
@@ -136,29 +161,28 @@ GRAMMAGE_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b', re.IGNORECAS
 COUNT_PATTERN = re.compile(r'(\d{1,2})\s*szt\b', re.IGNORECASE)
 
 
-def extract_unit_amount_grams(text: str, ingredient_name: str) -> float | None:
-    """Zwraca gramaturę/objętość opakowania w gramach/ml (lub przeliczoną
-    z liczby sztuk dla kategorii typu jajka), albo None jeśli tekst nie
-    zawiera żadnej wiarygodnej specyfikacji.
+def parse_package_spec(text: str, ingredient_name: str) -> tuple[str, float] | None:
+    """Zwraca ("szt"|"g"|"ml", ilość) opakowania wyczytaną z tekstu
+    (zwykle nazwy produktu), albo None gdy nie da się jej ustalić.
 
-    Dla produktów sprzedawanych na sztuki (np. jajka) próbujemy najpierw
-    COUNT_PATTERN — gdy szukamy w całym widocznym tekście strony produktu
-    (nie tylko w tytule), GRAMMAGE_PATTERN mogłoby złapać pierwszą liczbę
-    z gramami z tabeli wartości odżywczych (np. "białko 12 g") zamiast
-    prawdziwej wagi opakowania; "X szt" nie występuje w takich tabelach,
-    więc jest bezpieczniejszym pierwszym wyborem tam, gdzie ma sens."""
-    avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
-    if avg_weight is not None:
+    Dla składników sprzedawanych na sztuki (INGREDIENT_UNIT == "szt")
+    liczymy WYŁĄCZNIE sztuki — nie przeliczamy ich na gramy przez średnią
+    wagę, bo nikt nie kupuje jajek na wagę, a taka konwersja produkowała
+    absurdy w rodzaju "120 g jajek". Dla reszty bierzemy gramaturę; "X szt"
+    sprawdzamy pierwsze, bo w dłuższym tekście GRAMMAGE_PATTERN potrafi
+    złapać liczbę z tabeli wartości odżywczych zamiast wagi opakowania."""
+    if unit_for(ingredient_name) == "szt":
         m = COUNT_PATTERN.search(text)
-        if m:
-            return float(m.group(1)) * avg_weight
+        return ("szt", float(m.group(1))) if m else None
 
     m = GRAMMAGE_PATTERN.search(text)
     if m:
         amount = float(m.group(1).replace(",", "."))
         unit = m.group(2).lower()
-        if unit == "kg" or unit == "l":
-            amount *= 1000
-        return amount
+        if unit == "kg":
+            return ("g", amount * 1000)
+        if unit == "l":
+            return ("ml", amount * 1000)
+        return (unit, amount)
 
     return None

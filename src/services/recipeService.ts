@@ -162,8 +162,21 @@ export async function calculateRecipeCost(
       const price = await getCurrentPrice(storeProductId);
       if (price === null) continue;
 
-      const conversionFactor = (mapping as any).conversionFactor ?? 1;
-      const unitAmount = conversionFactor * 100; // gramatura/pojemność całego opakowania
+      let product: any;
+      try {
+        product = await database.get('store_products').find(storeProductId);
+      } catch {
+        continue;
+      }
+
+      // Wielkość i jednostka opakowania idą wprost z produktu sklepowego —
+      // tylko tam wiadomo, czy to 200 g kostka czy 10 sztuk. Jeśli jednostki
+      // się nie zgadzają (przepis w sztukach, opakowanie w gramach), nie ma
+      // bezpiecznego przelicznika — pomijamy, zamiast zgadywać wagę sztuki.
+      const unitAmount = product.unitAmount as number | undefined;
+      const productUnit = product.unit as string | undefined;
+      if (!unitAmount || unitAmount <= 0 || productUnit !== unit) continue;
+
       const pkgs = packagesNeeded(amount, unitAmount);
       const candidateCost = pkgs * price;
 
@@ -173,9 +186,7 @@ export async function calculateRecipeCost(
         bestPackagesNeeded = pkgs;
         bestUnitAmount = unitAmount;
         try {
-          const product = await database.get('store_products').find(storeProductId);
-          const storeId = (product as any).storeId as string;
-          const store = await database.get('stores').find(storeId);
+          const store = await database.get('stores').find(product.storeId as string);
           storeName = (store as any).name ?? null;
         } catch {
           storeName = null;

@@ -26,6 +26,28 @@ def get_or_create(sb: Client, table: str, match: dict, defaults: dict | None = N
     return ins.data[0]["id"]
 
 
+def replace_price(sb: Client, store_product_id: str, source: str,
+                  gross_price: float, valid_from: str, valid_to: str) -> None:
+    """Zapisuje cenę produktu, ZASTĘPUJĄC poprzednią z tego samego źródła.
+
+    Scrapery chodzą codziennie; zwykły insert dokładał przy każdym
+    przebiegu kolejny wiersz z tą samą kwotą (w bazie znalazło się 16
+    identycznych cen jednego sera), przez co tabela `prices` rosła bez
+    sensu, a "najnowsza cena" zależała od kolejności sortowania duplikatów.
+    """
+    sb.table("prices").delete() \
+        .eq("store_product_id", store_product_id) \
+        .eq("source", source) \
+        .execute()
+    sb.table("prices").insert({
+        "store_product_id": store_product_id,
+        "gross_price": gross_price,
+        "source": source,
+        "valid_from": valid_from,
+        "valid_to": valid_to,
+    }).execute()
+
+
 class BaseScraper:
     store_name: str = ""
     store_website: str = ""

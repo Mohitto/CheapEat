@@ -94,15 +94,27 @@ def calculate_recipe_cost(recipe_title_like: str):
         best_packages = None
         best_unit_amount = None
 
+        best_product = None
+
         for mapping in mappings_res.data:
             store_product_id = mapping["store_product_id"]
             price, source = get_current_price(store_product_id)
             if price is None:
                 continue
 
-            conversion_factor = mapping.get("conversion_factor") or 1
-            unit_amount = conversion_factor * 100  # gramatura/pojemność opakowania
-            packages = math.ceil(amount / unit_amount) if unit_amount > 0 else 1
+            sp_res = sb.table("store_products").select("*, stores(name)").eq("id", store_product_id).execute()
+            if not sp_res.data:
+                continue
+            sp = sp_res.data[0]
+
+            # Jednostka i wielkość opakowania idą z produktu sklepowego;
+            # opakowanie w innej jednostce niż przepis pomijamy (nie ma
+            # bezpiecznego przelicznika gramy <-> sztuki).
+            unit_amount = sp.get("unit_amount") or 0
+            if unit_amount <= 0 or sp.get("unit") != ri["unit"]:
+                continue
+
+            packages = math.ceil(amount / unit_amount)
             candidate_cost = packages * price
 
             if best_cost is None or candidate_cost < best_cost:
@@ -111,20 +123,20 @@ def calculate_recipe_cost(recipe_title_like: str):
                 best_source = source
                 best_packages = packages
                 best_unit_amount = unit_amount
-                sp_res = sb.table("store_products").select("*, stores(name)").eq("id", store_product_id).execute()
-                if sp_res.data:
-                    store_info = sp_res.data[0].get("stores")
-                    best_store = store_info["name"] if store_info else None
+                best_product = sp["name"]
+                store_info = sp.get("stores")
+                best_store = store_info["name"] if store_info else None
 
         if best_cost is None:
-            lines.append(f"  ✗ {ingredient_name} ({amount}{ri['unit']}): BRAK CENY")
+            lines.append(f"  ✗ {ingredient_name} ({amount} {ri['unit']}): BRAK CENY")
         else:
             has_any_cost = True
             total_cost += best_cost
             lines.append(
-                f"  ✓ {ingredient_name} ({amount}{ri['unit']}): {best_cost:.2f} zł "
-                f"[{best_store}, kup {best_packages}x opak. ({best_unit_amount:g}{ri['unit']}) "
-                f"@ {best_price} zł/opak., source={best_source}]"
+                f"  ✓ {ingredient_name} ({amount} {ri['unit']}): {best_cost:.2f} zł\n"
+                f"      kup {best_packages}x '{best_product}' "
+                f"({best_unit_amount:g} {ri['unit']} @ {best_price} zł) "
+                f"[{best_store}, source={best_source}]"
             )
 
     for line in lines:

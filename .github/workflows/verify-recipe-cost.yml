@@ -23,10 +23,36 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Tesseract OCR (pol)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Purge bad/stale price rows
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python cleanup_bad_mappings.py
+
+      - name: Re-seed test recipes (egg units in pieces)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python seed_dev_data.py
+
+      - name: Re-run all scrapers with unit-aware packages
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python run_all.py
+
       - name: Compute recipe cost from real Supabase data
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
         run: python verify_recipe_cost.py
 
       - name: Dump full price/mapping state per ingredient
@@ -35,8 +61,3 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           PYTHONUNBUFFERED: '1'
         run: python diagnose_prices.py
-
-      - name: Probe Biedronka shop for promotional price fields
-        env:
-          PYTHONUNBUFFERED: '1'
-        run: python probe_biedronka_promo.py

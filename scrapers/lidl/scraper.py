@@ -35,13 +35,15 @@ from datetime import datetime, timedelta
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from base_scraper import get_or_create, get_supabase
+from base_scraper import get_or_create, get_supabase, replace_price
 from ingredient_catalog import (
     INGREDIENT_DEFAULTS,
     INGREDIENT_KEYWORDS,
-    extract_unit_amount_grams,
     is_plausible,
     match_ingredient,
+    parse_package_spec,
+    unit_for,
+    unit_price_of,
 )
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
@@ -419,18 +421,24 @@ class LidlScraper:
             # dostępny) doklewa description/additionalProperty, gdzie
             # naprawdę bywa podana ilość/waga.
             spec_text = p.get("spec_text", p["title"])
-            unit_amount = extract_unit_amount_grams(spec_text, ingredient_name)
-            if unit_amount is None:
-                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości "
-                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny za 100g/ml")
+            spec = parse_package_spec(spec_text, ingredient_name)
+            if spec is None:
+                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono wielkości opakowania "
+                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny jednostkowej")
                 continue
 
-            price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
-            print(f"[Lidl] Dopasowano '{p['title']}' -> {ingredient_name} "
-                  f"({p['price']} zł, {price_per_100} zł/100)")
+            unit, unit_amount = spec
+            unit_price = unit_price_of(ingredient_name, p["price"], unit, unit_amount)
+            if unit_price is None:
+                print(f"[Lidl] Pomijam '{p['title']}' — opakowanie w '{unit}', "
+                      f"a {ingredient_name} liczymy w '{unit_for(ingredient_name)}'")
+                continue
 
-            candidate = {**p, "unit_amount": unit_amount, "price_per_100": price_per_100}
-            if ingredient_name not in found_per_ingredient or price_per_100 < found_per_ingredient[ingredient_name]["price_per_100"]:
+            print(f"[Lidl] Dopasowano '{p['title']}' -> {ingredient_name} "
+                  f"({p['price']} zł za {unit_amount:g}{unit}, {round(unit_price, 4)} zł/j.)")
+
+            candidate = {**p, "unit": unit, "unit_amount": unit_amount, "unit_price": unit_price}
+            if ingredient_name not in found_per_ingredient or unit_price < found_per_ingredient[ingredient_name]["unit_price"]:
                 found_per_ingredient[ingredient_name] = candidate
 
         saved = self._save(found_per_ingredient)
@@ -445,11 +453,11 @@ class LidlScraper:
         saved = 0
 
         for ingredient_name, p in found_per_ingredient.items():
-            unit_amount = p["unit_amount"]
-            price_per_100 = p["price_per_100"]
-            if not is_plausible(ingredient_name, price_per_100):
+            unit, unit_amount, unit_price = p["unit"], p["unit_amount"], p["unit_price"]
+            if not is_plausible(ingredient_name, unit_price):
                 print(f"[Lidl] Odrzucam nieprawdopodobną cenę: {ingredient_name} -> "
-                      f"{price_per_100} zł/100 (z '{p['title']}', {p['price']} zł za {unit_amount:g}g)")
+                      f"{round(unit_price, 4)} zł/j. (z '{p['title']}', {p['price']} zł "
+                      f"za {unit_amount:g}{unit})")
                 continue
 
             ingredient_id = get_or_create(
@@ -461,16 +469,14 @@ class LidlScraper:
             store_product_id = get_or_create(
                 self.sb, "store_products",
                 {"store_id": self.store_id, "name": product_name},
-                {"unit": "g", "unit_amount": unit_amount},
+                {"unit": unit, "unit_amount": unit_amount},
             )
+            self.sb.table("store_products").update(
+                {"unit": unit, "unit_amount": unit_amount}
+            ).eq("id", store_product_id).execute()
 
-            self.sb.table("prices").insert({
-                "store_product_id": store_product_id,
-                "gross_price": p["price"],
-                "source": "flyer-ssr",
-                "valid_from": today,
-                "valid_to": valid_to,
-            }).execute()
+            replace_price(self.sb, store_product_id, "flyer-ssr",
+                          p["price"], today, valid_to)
 
             existing_mapping = self.sb.table("ingredient_mappings").select("id") \
                 .eq("ingredient_id", ingredient_id) \
