@@ -23,7 +23,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Probe Biedronka shop for promotional price fields
+      - name: Install Tesseract OCR (pol)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Probe flyer page layout (word boxes vs prices)
         env:
           PYTHONUNBUFFERED: '1'
-        run: python probe_biedronka_promo.py
+        run: python probe_flyer_layout.py
