@@ -28,3 +28,15 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python verify_recipe_cost.py
+
+      - name: Dump full price/mapping state per ingredient
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python diagnose_prices.py
+
+      - name: Probe Biedronka shop for promotional price fields
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_biedronka_promo.py
