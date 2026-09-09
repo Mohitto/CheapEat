@@ -102,6 +102,79 @@ PLAUSIBLE_UNIT_PRICE: dict[str, tuple[float, float]] = {
 }
 
 
+# Słowa, które fuzzy-dopasowanie brałoby za nasz składnik, a są zupełnie
+# innym produktem. Polskiej morfologii nie da się tu rozstrzygnąć regułą:
+# "cukier" + "ki" to cukierki (słodycz), a nie cukier; "mielonka" (konserwa)
+# jest o jedną literę od "mielone". Lista jest z obserwacji, jak
+# INGREDIENT_EXCLUDE_KEYWORDS — rozszerzana, gdy coś realnie przecieknie.
+FUZZY_BLOCKED_WORDS = {
+    "cukierki", "cukierek", "cukierka", "cukierkow", "cukiereczki",
+    "mielonka", "mielonki", "serek", "serki", "serka",
+    "jajecznica", "maslanka", "maslanki",
+}
+
+_DIACRITICS = str.maketrans({
+    "ą": "a", "ć": "c", "ę": "e", "ł": "l", "ń": "n",
+    "ó": "o", "ś": "s", "ź": "z", "ż": "z",
+})
+# OCR na stylizowanych, dużych napisach gazetki regularnie myli znaki o
+# podobnym kształcie ("masło" -> "masto"/"masio", "ryż" -> "ryz"/"rvz").
+_OCR_CONFUSIONS = str.maketrans({"1": "l", "0": "o", "5": "s", "8": "b", "|": "l", "!": "l"})
+
+
+# Wielkie "I" i małe "l" to w bezszeryfowym foncie ta sama kreska —
+# rozstrzygamy to PRZED zmianą wielkości liter, bo po .lower() informacja
+# o wielkości znika i "mIeko" (czyli "mleko") remisuje z "mięso".
+_CASE_SENSITIVE_CONFUSIONS = str.maketrans({"I": "l"})
+
+
+def fold(text: str) -> str:
+    """Postać porównawcza odporna na polskie znaki i typowe pomyłki OCR."""
+    return (text.translate(_CASE_SENSITIVE_CONFUSIONS)
+                .lower().translate(_DIACRITICS).translate(_OCR_CONFUSIONS))
+
+
+def fuzzy_ingredient(word: str, min_ratio: float = 0.80) -> str | None:
+    """Kategoria składnika dla POJEDYNCZEGO słowa z OCR, tolerancyjnie na
+    przekręcone litery. Używane przy gazetce, gdzie tekst jest odczytany
+    z obrazka — "masto 82%" ma trafić w "masło". Krótkie słowa (<4 znaki)
+    porównujemy tylko dokładnie, bo przy nich każda pomyłka to inne słowo."""
+    from difflib import SequenceMatcher
+
+    cleaned = fold(word.strip(" ,.:;()[]%*"))
+    if len(cleaned) < 3 or cleaned in FUZZY_BLOCKED_WORDS:
+        return None
+
+    best_name, best_score = None, 0.0
+    for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
+        for kw in keywords:
+            # Słowa kluczowe wielowyrazowe ("mięso mielone") nie wystąpią
+            # jako pojedynczy token — porównujemy z ich członami.
+            for part in fold(kw).split():
+                if len(part) < 4:
+                    if cleaned == part:
+                        return ingredient_name
+                    continue
+
+                if cleaned == part:
+                    return ingredient_name
+
+                # Odmiana ("kurczaka", "pomidory") to najwyżej kilka liter
+                # dosklejonych na końcu; bez limitu długości "makaron"
+                # trafiałby w "mąka".
+                if cleaned.startswith(part) and len(cleaned) - len(part) <= 2:
+                    return ingredient_name
+
+                score = SequenceMatcher(None, cleaned, part).ratio()
+                # Bierzemy NAJLEPSZE dopasowanie, nie pierwsze powyżej progu:
+                # "mieko" (OCR z "mleko") pasuje i do "mleko", i do "mięso",
+                # a kolejność w słowniku nie powinna o tym decydować.
+                if score >= min_ratio and score > best_score:
+                    best_name, best_score = ingredient_name, score
+
+    return best_name
+
+
 def match_ingredient(text: str) -> str | None:
     """Zwraca nazwę kategorii dopasowaną do tekstu (dopasowanie
     podciągu, bez rozróżniania wielkości liter) albo None.

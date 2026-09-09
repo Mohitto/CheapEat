@@ -1,53 +1,43 @@
 """
-Scraper gazetki Biedronka — realny pipeline oparty na OCR.
+Scraper gazetki Biedronka — ceny promocyjne odczytywane z obrazków.
 
-Biedronka NIE udostępnia strukturalnych danych cenowych (sprawdzone
-dokładnie przez scrapers/probe_biedronka_*.py — leaflet-api zwraca tylko
-bitmapy stron, zero hotspotów/cen jako dane). Jedyna droga do prawdziwych
-cen to:
+Biedronka NIE udostępnia cen gazetkowych jako danych (sprawdzone przez
+scrapers/probe_biedronka_*.py — leaflet-api zwraca wyłącznie bitmapy
+stron). Jedyna droga to OCR, i to on jest rdzeniem cen promocyjnych w tej
+aplikacji:
 
-  1. https://www.biedronka.pl/pl/gazetki -> link do aktualnej gazetki
-     (press,id,...), preferując wariant "codziennie-niskie-ceny"
-  2. Strona press,id,... zawiera w statycznym HTML:
-     window.galleryLeaflet.init("{UUID}")
-  3. https://leaflet-api.prod.biedronka.cloud/api/leaflets/{UUID}?ctx=web
-     zwraca images_desktop: [{page, images: [url PNG]}]
-  4. Tesseract OCR (darmowy, open-source — projekt ma być bezpłatny, więc
-     celowo nie płatne API wizyjne) na każdej stronie, --psm 3 -l pol
-  5. Dwa rodzaje wzorców cenowych (patrz extract_price_candidates):
-     a) jawna cena za jednostkę: "X,XX zł/100 g", "/100 ml", "/kg", "/l"
-     b) cena za opakowanie: "X,XX zł" + gramatura/ilość znaleziona w
-        pobliskim tekście ("500 g", "10 szt"...) — obejmuje produkty
-        typu "500g mięsa mielonego — 5,49 zł" albo "10 szt jajek — 9,89 zł",
-        które NIE są podane jako cena za 100g wprost.
-  Klasyfikacja do kategorii składnika (jajka, mięso mielone, ...) jest
-  markowo-agnostyczna — patrz scrapers/ingredient_catalog.py (współdzielony
-  z lidl/scraper.py, żeby oba sklepy klasyfikowały identycznie).
+  1. biedronka/flyers.py — WSZYSTKIE gazetki z /pl/gazetki wraz z okresem
+     obowiązywania (data startu jest w slugu adresu). Czytamy tylko te
+     obowiązujące dzisiaj, więc wydanie zapowiedziane na przyszły tydzień
+     nie zaniża cen, a wygasłe znikają same.
+  2. Strona press,id,... zawiera window.galleryLeaflet.init("{UUID}"),
+     a leaflet-api pod tym UUID-em zwraca adresy obrazków stron.
+  3. biedronka/leaflet_ocr.py — tesseract (darmowy, open-source: projekt
+     ma pozostać bezpłatny, więc świadomie bez płatnych API wizyjnych) w
+     trybie TSV, czyli ze współrzędnymi każdego słowa. Cenę wiążemy z
+     nazwą produktu i gramaturą po ODLEGŁOŚCI NA STRONIE, bo gazetka to
+     siatka kafelków i kolejność czytania tekstu nie odpowiada układowi.
+
+Klasyfikacja do kategorii składnika jest markowo-agnostyczna i wspólna z
+pozostałymi sklepami — patrz scrapers/ingredient_catalog.py.
 
 Bezpieczeństwo: każdy kandydat musi przejść ingredient_catalog.is_plausible
-(rozsądny zakres zł/100g dla danej kategorii) zanim trafi do bazy — OCR na
-stylizowanej grafice marketingowej regularnie się myli, a to samo dotyczy
-dopasowania kontekstu (cena sąsiedniego produktu w oknie). Lepiej brakująca
-cena niż pewna siebie zła cena.
+(rozsądny zakres ceny jednostkowej dla kategorii), zanim trafi do bazy —
+OCR na stylizowanej grafice marketingowej regularnie się myli. Lepiej
+brakująca cena niż pewna siebie zła cena.
 """
 import os
 import re
-import subprocess
 import sys
-from datetime import datetime, timedelta
 
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_scraper import get_or_create, get_supabase, replace_price
-from ingredient_catalog import (
-    INGREDIENT_DEFAULTS,
-    INGREDIENT_KEYWORDS,
-    is_plausible,
-    match_ingredient,
-    unit_for,
-    unit_price_of,
-)
+from ingredient_catalog import INGREDIENT_DEFAULTS, INGREDIENT_KEYWORDS
+
+from .flyers import active_flyers
+from .leaflet_ocr import extract_candidates, ocr_page
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
 
@@ -56,42 +46,7 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
 }
 
-GAZETKI_URL = "https://www.biedronka.pl/pl/gazetki"
-PRESS_LINK_PATTERN = re.compile(r'href=["\'](?:https://www\.biedronka\.pl)?(/pl/press,id,[^"\']+)["\']')
 UUID_PATTERN = re.compile(r'window\.galleryLeaflet\.init\("([0-9a-f-]{36})"\)')
-
-# 1) Jawna cena za jednostkę — nic do przeliczenia poza jednostką bazową.
-EXPLICIT_UNIT_PRICE_PATTERNS = [
-    (re.compile(r'(\d{1,3}[,.]\d{2})\s*z[łl]\s*/\s*100\s*g', re.IGNORECASE), "100g", 1.0),
-    (re.compile(r'(\d{1,3}[,.]\d{2})\s*z[łl]\s*/\s*100\s*ml', re.IGNORECASE), "100ml", 1.0),
-    (re.compile(r'(\d{1,3}[,.]\d{2})\s*z[łl]\s*/\s*kg', re.IGNORECASE), "kg", 0.1),
-    (re.compile(r'(\d{1,3}[,.]\d{2})\s*z[łl]\s*/\s*l\b', re.IGNORECASE), "l", 0.1),
-]
-
-# 2) Zwykła cena (nie zaraz po niej "/coś" — to by już złapał wzór powyżej).
-PACKAGE_PRICE_PATTERN = re.compile(r'(\d{1,3}[,.]\d{2})\s*z[łl](?!\s*/)', re.IGNORECASE)
-
-# Specyfikacje wagi/ilości opakowania szukane w pobliżu ceny z (2).
-PACKAGE_SPEC_PATTERNS = [
-    (re.compile(r'\b(\d{2,4})\s*g\b', re.IGNORECASE), "g", 1.0),
-    (re.compile(r'\b(\d+(?:[,.]\d+)?)\s*kg\b', re.IGNORECASE), "kg", 1000.0),
-    (re.compile(r'\b(\d{2,4})\s*ml\b', re.IGNORECASE), "ml", 1.0),
-    (re.compile(r'\b(\d{1,2})\s*szt\b', re.IGNORECASE), "szt", None),  # None = licz sztuki, nie gramy
-]
-
-CONTEXT_WINDOW_CHARS = 200
-PACKAGE_SPEC_WINDOW_CHARS = 150
-
-
-def find_current_press_url() -> str:
-    resp = requests.get(GAZETKI_URL, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    candidates = sorted(set(PRESS_LINK_PATTERN.findall(resp.text)))
-    if not candidates:
-        raise RuntimeError("Nie znaleziono linku do aktualnej gazetki na /pl/gazetki")
-    chosen = next((c for c in candidates if "codziennie-niskie-ceny" in c), candidates[0])
-    return "https://www.biedronka.pl" + chosen
-
 
 def find_uuid(press_url: str) -> str:
     resp = requests.get(press_url, headers=HEADERS, timeout=30)
@@ -118,129 +73,6 @@ def get_page_image_urls(uuid: str) -> list[str]:
     return urls
 
 
-def ocr_page(image_url: str) -> str:
-    img_resp = requests.get(image_url, headers=HEADERS, timeout=30)
-    img_resp.raise_for_status()
-    tmp_path = "/tmp/biedronka_page.png"
-    with open(tmp_path, "wb") as f:
-        f.write(img_resp.content)
-    # Bez timeoutu tesseract potrafił wisieć w nieskończoność na
-    # niektórych stronach (zablokował cały workflow na >6h limicie joba,
-    # zamiast pominąć jedną stronę jak przy błędzie sieci — patrz
-    # obsługa wyjątków w scrape()).
-    result = subprocess.run(
-        ["tesseract", tmp_path, "stdout", "-l", "pol", "--psm", "3"],
-        capture_output=True, text=True, timeout=60,
-    )
-    return result.stdout
-
-
-def _nearest_package_spec(text: str, price_pos: int) -> tuple[float | None, str | None, int | None]:
-    """Szuka specyfikacji wagi/ilości opakowania (500 g / 1 kg / 10 szt) w
-    oknie wokół pozycji ceny (przed i po) i zwraca tę najbliższą pozycyjnie.
-    Zwraca (ilość_surowa, jednostka, odległość_w_znakach) albo (None, None, None)."""
-    window_start = max(0, price_pos - PACKAGE_SPEC_WINDOW_CHARS)
-    window_end = min(len(text), price_pos + PACKAGE_SPEC_WINDOW_CHARS)
-    window = text[window_start:window_end]
-    price_pos_in_window = price_pos - window_start
-
-    best = (None, None, None)
-    best_distance = None
-    for pattern, unit_label, _ in PACKAGE_SPEC_PATTERNS:
-        for m in pattern.finditer(window):
-            distance = min(abs(m.start() - price_pos_in_window), abs(m.end() - price_pos_in_window))
-            if best_distance is None or distance < best_distance:
-                raw_amount = float(m.group(1).replace(",", "."))
-                best = (raw_amount, unit_label, distance)
-                best_distance = distance
-    return best
-
-
-def extract_price_candidates(text: str) -> list[dict]:
-    """Zwraca listę kandydatów {ingredient_name, package_price, unit,
-    unit_amount, unit_price} dla każdego rozpoznanego i wiarygodnego
-    dopasowania.
-
-    `package_price` to kwota, którą realnie płaci się przy kasie za jedno
-    opakowanie — nie cena przeliczona na 100 g. Wcześniej zapisywaliśmy
-    tylko tę przeliczoną i gubiliśmy rozmiar opakowania, więc promocja
-    "kostka masła 2,50 zł" trafiała do bazy jako sztuczne opakowanie 100 g
-    z ceną za 100 g i nie dawało się jej pokazać jako realnego kosztu.
-    """
-    candidates = []
-
-    # --- 1) Jawna cena za jednostkę ("X zł/100 g", "/kg", "/l") ---
-    # Tu gazetka NIE podaje rozmiaru opakowania, więc zapisujemy uczciwie
-    # to, co wiemy: porcję 100 g/ml w tej cenie.
-    for pattern, unit_label, to_100_factor in EXPLICIT_UNIT_PRICE_PATTERNS:
-        for m in pattern.finditer(text):
-            raw_price = float(m.group(1).replace(",", "."))
-            price_per_100 = round(raw_price * to_100_factor, 4)
-
-            window_start = max(0, m.start() - CONTEXT_WINDOW_CHARS)
-            context = text[window_start:m.start()]
-            ingredient_name = match_ingredient(context)
-            if not ingredient_name:
-                continue
-
-            base_unit = unit_for(ingredient_name)
-            if base_unit == "szt":
-                continue  # cena za 100 g nic nie mówi o cenie sztuki
-
-            if not is_plausible(ingredient_name, price_per_100):
-                print(f"[Biedronka] Odrzucam nieprawdopodobną cenę: {ingredient_name} "
-                      f"-> {price_per_100} zł/100 (surowo: {raw_price} zł/{unit_label})")
-                continue
-
-            candidates.append({
-                "ingredient_name": ingredient_name,
-                "package_price": price_per_100,
-                "unit": base_unit,
-                "unit_amount": 100.0,
-                "unit_price": price_per_100,
-            })
-
-    # --- 2) Cena za opakowanie + znaleziona w pobliżu gramatura/ilość ---
-    for m in PACKAGE_PRICE_PATTERN.finditer(text):
-        raw_price = float(m.group(1).replace(",", "."))
-
-        context_start = max(0, m.start() - CONTEXT_WINDOW_CHARS)
-        context = text[context_start:m.start()]
-        ingredient_name = match_ingredient(context)
-        if not ingredient_name:
-            continue
-
-        raw_amount, unit_label, _ = _nearest_package_spec(text, m.start())
-        if raw_amount is None or raw_amount <= 0:
-            continue  # bez wiarygodnej gramatury/ilości nie zgadujemy
-
-        if unit_label == "szt":
-            unit, unit_amount = "szt", raw_amount
-        elif unit_label == "kg":
-            unit, unit_amount = "g", raw_amount * 1000.0
-        else:  # "g" albo "ml"
-            unit, unit_amount = unit_label, raw_amount
-
-        unit_price = unit_price_of(ingredient_name, raw_price, unit, unit_amount)
-        if unit_price is None:
-            continue  # opakowanie w innej jednostce niż liczymy ten składnik
-
-        if not is_plausible(ingredient_name, unit_price):
-            print(f"[Biedronka] Odrzucam nieprawdopodobną cenę (opakowanie): {ingredient_name} "
-                  f"-> {round(unit_price, 4)} zł/j. (surowo: {raw_price} zł za {raw_amount:g} {unit_label})")
-            continue
-
-        candidates.append({
-            "ingredient_name": ingredient_name,
-            "package_price": raw_price,
-            "unit": unit,
-            "unit_amount": unit_amount,
-            "unit_price": unit_price,
-        })
-
-    return candidates
-
-
 class BiedronkaScraper:
     store_name = "Biedronka"
     store_website = "https://www.biedronka.pl"
@@ -253,88 +85,81 @@ class BiedronkaScraper:
         )
 
     def scrape(self) -> dict:
-        press_url = find_current_press_url()
-        print(f"[Biedronka] Aktualna gazetka: {press_url}")
-        uuid = find_uuid(press_url)
-        print(f"[Biedronka] UUID: {uuid}")
-        image_urls = get_page_image_urls(uuid)
-        print(f"[Biedronka] Stron do przetworzenia: {len(image_urls)}")
+        """Czyta WSZYSTKIE gazetki obowiązujące dzisiaj.
+
+        Wcześniej brana była jedna gazetka wybrana po nazwie, przez co
+        (a) trafialiśmy w wydanie zaczynające się dopiero za kilka dni,
+        czyli w ceny jeszcze nieobowiązujące, i (b) w ogóle nie
+        otwieraliśmy gazetek tematycznych ("festiwal nabiału"), gdzie
+        siedzi część promocji na nasze składniki."""
+        flyers = active_flyers()
+        if not flyers:
+            print("[Biedronka] Brak gazetek obowiązujących dzisiaj")
+            return {"flyers": 0, "pages_scanned": 0, "ingredients_found": 0, "saved": 0}
+
+        print(f"[Biedronka] Gazetki obowiązujące dzisiaj: {len(flyers)}")
+        for f in flyers:
+            print(f"[Biedronka]   {f['slug']}: {f['valid_from']} .. {f['valid_to']}")
 
         found_per_ingredient: dict[str, dict] = {}
-        keyword_seen_on_page: dict[str, int] = {}
+        pages_scanned = 0
 
-        for i, image_url in enumerate(image_urls):
-            if DEBUG:
-                print(f"[Biedronka] Strona {i}/{len(image_urls)}: pobieram i OCR-uję...")
+        for flyer in flyers:
             try:
-                text = ocr_page(image_url)
+                uuid = find_uuid("https://www.biedronka.pl" + flyer["path"])
+                image_urls = get_page_image_urls(uuid)
             except Exception as e:
-                print(f"[Biedronka] Strona {i}: błąd OCR ({e}), pomijam")
+                print(f"[Biedronka] {flyer['slug']}: nie udało się pobrać stron ({e}), pomijam")
                 continue
 
-            if DEBUG:
-                text_lower = text.lower()
-                page_had_new_hit = False
-                for ingredient_name, keywords in INGREDIENT_KEYWORDS.items():
-                    if ingredient_name in keyword_seen_on_page:
-                        continue
-                    for kw in keywords:
-                        idx = text_lower.find(kw)
-                        if idx != -1:
-                            snippet = text[max(0, idx - 40):idx + 60].replace("\n", " ")
-                            keyword_seen_on_page[ingredient_name] = i
-                            page_had_new_hit = True
-                            print(f"[Biedronka] Strona {i}: '{kw}' (kategoria: {ingredient_name}) w OCR -> "
-                                  f"...{snippet}...")
-                            break
-                if page_had_new_hit:
-                    # Pełny surowy tekst OCR strony (nie tylko 100-znakowy
-                    # fragment) — do ręcznej analizy, dlaczego regex ceny nic
-                    # nie złapał (np. cena w formacie "przy zakupie X sztuk",
-                    # nie prosta etykieta "X,XX zł"). Zapisujemy DO PLIKU
-                    # (artefakt "Upload debug dumps" — do pobrania z Actions
-                    # UI), ale też wypisujemy na stdout, bo artefakty ZIP
-                    # nie są pobieralne z tego środowiska (blokada egress na
-                    # Azure Blob Storage) — logi joba są jedynym kanałem,
-                    # który faktycznie da się tu odczytać.
-                    with open(f"debug_biedronka_strona_{i}.txt", "w", encoding="utf-8") as f:
-                        f.write(text)
-                    print(f"[Biedronka] === PEŁNY OCR strony {i} (nowe trafienie słowa kluczowego) ===")
-                    print(text)
-                    print(f"[Biedronka] === koniec pełnego OCR strony {i} ===")
+            print(f"[Biedronka] {flyer['slug']}: {len(image_urls)} stron")
 
-            candidates = extract_price_candidates(text)
-            for c in candidates:
-                name = c["ingredient_name"]
-                # Jeśli kilka stron trafia w ten sam składnik, zostaw najtańszą
-                # (typowe zachowanie promocji — najniższa widoczna cena wygrywa).
-                if name not in found_per_ingredient or c["unit_price"] < found_per_ingredient[name]["unit_price"]:
-                    found_per_ingredient[name] = c
-                    print(f"[Biedronka] Strona {i}: {name} -> {c['package_price']} zł "
-                          f"za {c['unit_amount']:g}{c['unit']} ({round(c['unit_price'], 4)} zł/j.)")
+            for i, image_url in enumerate(image_urls):
+                try:
+                    tokens, page_width = ocr_page(image_url)
+                except Exception as e:
+                    print(f"[Biedronka] {flyer['slug']} strona {i}: błąd OCR ({e}), pomijam")
+                    continue
+
+                pages_scanned += 1
+                for c in extract_candidates(tokens, page_width, debug=DEBUG):
+                    name = c["ingredient_name"]
+                    # Ten sam składnik potrafi być w kilku gazetkach naraz —
+                    # zostaje najtańsza oferta, bo taką realnie się wybierze.
+                    previous = found_per_ingredient.get(name)
+                    if previous is None or c["unit_price"] < previous["unit_price"]:
+                        found_per_ingredient[name] = {**c, "flyer": flyer}
+                        print(f"[Biedronka] {flyer['slug']} s.{i}: {name} -> "
+                              f"{c['package_price']} zł za {c['unit_amount']:g}{c['unit']} "
+                              f"({round(c['unit_price'], 4)} zł/j.)")
 
         if DEBUG:
-            missing = [name for name in INGREDIENT_KEYWORDS if name not in found_per_ingredient]
-            print(f"[Biedronka] Kategorie bez ceny w tej gazetce: {missing}")
-            print(f"[Biedronka] Kategorie których słowo kluczowe w ogóle NIE pojawiło się w OCR "
-                  f"(prawdopodobnie brak promocji w tym tygodniu): "
-                  f"{[m for m in missing if m not in keyword_seen_on_page]}")
-            print(f"[Biedronka] Kategorie których słowo kluczowe pojawiło się, ale nie wyszła cena "
-                  f"(warto zbadać ekstrakcję): {[m for m in missing if m in keyword_seen_on_page]}")
+            missing = [n for n in INGREDIENT_KEYWORDS if n not in found_per_ingredient]
+            print(f"[Biedronka] Kategorie bez ceny w gazetkach: {missing}")
 
         saved = self._save(found_per_ingredient)
-        return {"pages_scanned": len(image_urls), "ingredients_found": len(found_per_ingredient), "saved": saved}
+        return {
+            "flyers": len(flyers),
+            "pages_scanned": pages_scanned,
+            "ingredients_found": len(found_per_ingredient),
+            "saved": saved,
+        }
 
     def _save(self, found_per_ingredient: dict[str, dict]) -> int:
         if not found_per_ingredient:
             return 0
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        valid_to = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
         saved = 0
 
         for ingredient_name, c in found_per_ingredient.items():
             unit, unit_amount = c["unit"], c["unit_amount"]
+            # Ważność ceny bierzemy z gazetki, w której ją znaleźliśmy —
+            # nie ze sztywnego "dziś + 3 dni". Dzięki temu promocja wygasa
+            # dokładnie wtedy, kiedy kończy się gazetka, a apka wraca do
+            # ceny regularnej ze sklepu.
+            flyer = c["flyer"]
+            valid_from = flyer["valid_from"].isoformat()
+            valid_to = flyer["valid_to"].isoformat()
 
             ingredient_id = get_or_create(
                 self.sb, "ingredients", {"name": ingredient_name},
@@ -355,7 +180,7 @@ class BiedronkaScraper:
             ).eq("id", store_product_id).execute()
 
             replace_price(self.sb, store_product_id, "flyer-ocr",
-                          c["package_price"], today, valid_to)
+                          c["package_price"], valid_from, valid_to)
 
             existing_mapping = self.sb.table("ingredient_mappings").select("id") \
                 .eq("ingredient_id", ingredient_id) \
