@@ -20,7 +20,10 @@ HEADERS = {
 }
 
 BASE = "https://zakupy.biedronka.pl"
-CATEGORIES = ["/nabial/maslo/", "/nabial/jaja/"]
+# /promocje i /polecane/promocje/ to prawdziwe linki z nawigacji strony
+# głównej (probe_biedronka_zakupy.py) — jeśli sklep online w ogóle
+# publikuje ceny promocyjne w sposób strukturalny, to właśnie tam.
+CATEGORIES = ["/promocje", "/polecane/promocje/", "/nabial/maslo/"]
 
 PROMO_MARKERS = [
     "promocj", "omnibus", "regularna", "najniższa", "przekreśl",
@@ -34,6 +37,17 @@ def probe(path: str) -> None:
     resp = requests.get(url, headers=HEADERS, timeout=30)
     html = resp.text
     print(f"\n{'='*70}\n{url} -> status {resp.status_code}, długość {len(html)}\n{'='*70}")
+
+    # 0. Jakie warianty "opakowania ceny" występują — price--default to
+    # cena regularna; jakikolwiek inny wariant oznaczałby promocję.
+    wrappers = re.findall(r'price-tile__wrapper\s+([a-z0-9_-]+)', html, re.IGNORECASE)
+    counts: dict[str, int] = {}
+    for w in wrappers:
+        counts[w] = counts.get(w, 0) + 1
+    print(f"warianty price-tile__wrapper: {counts}")
+
+    strikethrough = re.findall(r'class="[^"]*price[^"]*(?:strike|old|was|regular|previous)[^"]*"', html, re.IGNORECASE)
+    print(f"klasy sugerujące cenę przekreśloną/regularną: {sorted(set(strikethrough))[:10]}")
 
     # 1. Markery promocji w całym HTML kategorii
     low = html.lower()

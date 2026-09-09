@@ -23,22 +23,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run probe
+      - name: Probe Biedronka shop for promotional price fields
         env:
           PYTHONUNBUFFERED: '1'
-        run: python probe_biedronka_shop.py
-
-      - name: Run zakupy.biedronka.pl probe
-        env:
-          PYTHONUNBUFFERED: '1'
-        run: python probe_biedronka_zakupy.py
-
-      - name: Probe real category pages (mleko, jaja, masło)
-        env:
-          PYTHONUNBUFFERED: '1'
-        run: python probe_biedronka_category.py
-
-      - name: Probe exact product tile HTML structure
-        env:
-          PYTHONUNBUFFERED: '1'
-        run: python probe_biedronka_tile.py
+        run: python probe_biedronka_promo.py
