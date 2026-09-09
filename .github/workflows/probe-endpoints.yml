@@ -35,9 +35,13 @@ jobs:
           # Obrazy runnerów mają doklejone repozytoria firm trzecich (Chrome),
           # które potrafią serwować nieaktualny indeks i wywalić apt-get update
           # na niezgodności sumy kontrolnej — co nie ma nic wspólnego z
-          # pakietami, których potrzebujemy. Nie zależymy od nich, więc precz.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update -qq
+          # pakietami, których potrzebujemy. Nie zależymy od nich, więc precz
+          # (nazwa pliku bywa różna: .list albo .sources, stąd szukanie treści).
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          # Nieudane odświeżenie indeksów nie może blokować instalacji —
+          # tesseract jest w głównym archiwum Ubuntu. Jeśli mimo to nie da się
+          # go zainstalować, padnie następna komenda i zobaczymy to wprost.
+          sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
           sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
 
       - name: Probe Biedronka OCR feasibility
