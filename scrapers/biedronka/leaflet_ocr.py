@@ -46,6 +46,18 @@ FULL_PRICE = re.compile(r'^(\d{1,3})[,.](\d{2})$')
 INTEGER_PART = re.compile(r'^\d{1,3}$')
 DECIMAL_PART = re.compile(r'^\d{2}$')
 
+# Gazetka składa cenę z dużych złotówek i małych, uniesionych groszy —
+# bez przecinka między nimi. OCR widzi to jako jedną liczbę: "349" zamiast
+# "3,49", "1099" zamiast "10,99". Bez tego większość cen promocyjnych w
+# ogóle do nas nie docierała (85 stron dawało 4 składniki).
+GLUED_PRICE = re.compile(r'^\d{3,4}$')
+# Token tuż za ceną, który zdradza, że to była gramatura, a nie kwota.
+UNIT_AFTER_NUMBER = re.compile(r'^(g|ml|kg|l|szt\.?|%)$', re.IGNORECASE)
+# Duża czcionka to podstawowy sygnał, że liczba jest ceną z kafelka, a nie
+# wagą w drobnym druku; próg liczony względem mediany strony.
+GLUED_PRICE_MIN_HEIGHT_RATIO = 1.3
+GLUED_PRICE_MIN_MAX_RATIO = 0.45
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -145,7 +157,55 @@ def find_prices(tokens: list[Token], page_width: int) -> list[tuple[Token, float
             used.add(j)
             break
 
+    found.extend(_find_glued_prices(tokens, used, page_width))
     return found
+
+
+def _find_glued_prices(tokens: list[Token], used: set[int],
+                       page_width: int) -> list[tuple[Token, float]]:
+    """Ceny zapisane bez przecinka ("349" = 3,49 zł), bo złotówki i grosze
+    mają różną wielkość i OCR łączy je w jedną liczbę.
+
+    Sama liczba to za mało, żeby uznać ją za cenę — "400" bywa gramaturą,
+    a "2026" rokiem. Wymagamy więc dużej czcionki (cena jest jednym z
+    największych napisów na kafelku) i braku jednostki tuż obok."""
+    heights = sorted(t.height for t in tokens)
+    if not heights:
+        return []
+    median_height = heights[len(heights) // 2]
+    # Dwa progi naraz: "wyraźnie większe od zwykłego tekstu" ORAZ "w skali
+    # największych napisów strony". Sama mediana zawodzi na stronach z
+    # garstką tokenów, gdzie i ona jest duża; sam udział w maksimum
+    # przepuszczałby drobny druk na stronach bez dużych nagłówków.
+    min_height = max(median_height * GLUED_PRICE_MIN_HEIGHT_RATIO,
+                     heights[-1] * GLUED_PRICE_MIN_MAX_RATIO)
+    max_gap = page_width * 0.02
+
+    out: list[tuple[Token, float]] = []
+    for i, t in enumerate(tokens):
+        if i in used or not GLUED_PRICE.match(t.text):
+            continue
+        if t.height < min_height:
+            continue
+
+        value = int(t.text)
+        # Lata (1900-2100) zapisane bez separatora wyglądają identycznie
+        # jak cena rzędu 19-21 zł, a w gazetce pełno dat.
+        if 1900 <= value <= 2100:
+            continue
+
+        if any(
+            UNIT_AFTER_NUMBER.match(other.text)
+            and other.left >= t.left
+            and other.left - (t.left + t.width) <= max_gap
+            and abs(other.top - t.top) <= t.height
+            for other in tokens
+        ):
+            continue
+
+        out.append((t, value / 100))
+
+    return out
 
 
 # Cena z dopiskiem "/kg", "/l", "/100 g" to cena JEDNOSTKOWA podana obok
