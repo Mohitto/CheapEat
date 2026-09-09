@@ -39,7 +39,9 @@ ALL_KEYWORDS = [kw for kws in INGREDIENT_KEYWORDS.values() for kw in kws]
 
 # Gazetka, która NAS interesuje na tym teście: festiwal nabiału (masło!).
 PREFERRED_SLUGS = ["festiwal-nabiau", "codziennie-niskie-ceny-p-oferta-od-07-09"]
-PAGES_TO_TEST = [2, 3, 4]
+# Gazetki tematyczne bywają 2-stronicowe, więc bierzemy pierwsze strony,
+# ile ich jest, zamiast sztywnych numerów.
+PAGES_TO_TEST = 3
 
 
 def find_flyers() -> list[str]:
@@ -112,9 +114,7 @@ def main():
     urls = page_urls(chosen)
     print(f"Stron: {len(urls)}\n")
 
-    for page_idx in PAGES_TO_TEST:
-        if page_idx >= len(urls):
-            continue
+    for page_idx in range(min(PAGES_TO_TEST, len(urls))):
         raw = requests.get(urls[page_idx], headers=HEADERS, timeout=60).content
         base = f"/tmp/page_{page_idx}.png"
         with open(base, "wb") as f:
