@@ -29,7 +29,14 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Install Tesseract OCR (pol)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+        run: |
+          # Obrazy runnerów mają doklejone repozytoria firm trzecich (Chrome),
+          # które potrafią serwować nieaktualny indeks i wywalić apt-get update
+          # na niezgodności sumy kontrolnej — co nie ma nic wspólnego z
+          # pakietami, których potrzebujemy. Nie zależymy od nich, więc precz.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
 
       - name: Run all scrapers
         env:
