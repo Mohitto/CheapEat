@@ -67,6 +67,14 @@ GROCERY_SECTION_PREFIXES = (
     "/dania-gotowe/",
 )
 
+# Sekcje promocyjne sklepu — prawdziwe linki z nawigacji strony głównej.
+# Potwierdzone na żywo (probe_biedronka_promo.py): /promocje ma 32 kafelki
+# z etykietą rabatu ("20% taniej") i ceną omnibus obok bieżącej. Kafelki
+# mają tę samą strukturę co zwykłe kategorie, więc parsujemy je tak samo —
+# chodzi o zasięg: produkt przeceniony w sekcji, której nie skanujemy
+# (albo w kategorii spoza listy powyżej), inaczej w ogóle nam ucieka.
+PROMO_CATEGORY_PATHS = ("/promocje", "/polecane/promocje/")
+
 HREF_PATTERN = re.compile(r'href=["\']([^"\']+)["\']')
 # Potwierdzone na żywo na kafelku produktu (probe_biedronka_tile.py):
 # JSON warstwy danych GTM osadzony jako atrybut HTML, wartości
@@ -97,7 +105,8 @@ def discover_grocery_category_urls() -> list[str]:
         l for l in links
         if l.startswith(GROCERY_SECTION_PREFIXES) and l.endswith("/")
     })
-    return [BASE_URL + l for l in matching]
+    promo = [p for p in PROMO_CATEGORY_PATHS if p in links]
+    return [BASE_URL + l for l in promo + matching]
 
 
 def parse_packaging_details(tile_html: str) -> tuple[str, float] | None:
