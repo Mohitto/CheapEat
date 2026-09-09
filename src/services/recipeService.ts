@@ -2,7 +2,7 @@ import database from '../model/database';
 import { Q } from '@nozbe/watermelondb';
 import { Recipe } from '../model/Recipe';
 import { RecipeIngredient } from '../model/RecipeIngredient';
-import { getIngredientMappings, calculateIngredientCostPer100g } from './ingredientService';
+import { getIngredientMappings, packagesNeeded } from './ingredientService';
 import { getCurrentPrice } from './priceService';
 
 // ---------------------------------------------------------------------------
@@ -71,8 +71,10 @@ export type IngredientCostLine = {
   ingredientName: string;
   amount: number;
   unit: string;
-  costPln: number | null;    // null = brak ceny w bazie (albo przyprawa, patrz IGNORED_IN_COST)
-  pricePerUnit: number | null;
+  costPln: number | null;    // koszt CAŁYCH opakowań potrzebnych do pokrycia amount (nie ułamek ceny) — null = brak ceny w bazie (albo przyprawa, patrz IGNORED_IN_COST)
+  pricePerUnit: number | null; // cena JEDNEGO opakowania
+  packagesNeeded: number | null; // ile opakowań trzeba kupić (costPln = packagesNeeded * pricePerUnit)
+  unitAmount: number | null;     // gramatura/pojemność jednego opakowania
   storeName: string | null;  // sklep, w którym znaleziono najtańszą opcję
 };
 
@@ -96,8 +98,13 @@ export const IGNORED_IN_COST = new Set(['sól']);
  * Oblicza szacowany koszt przepisu na podstawie aktualnych cen.
  * Dla każdego składnika (poza przyprawami z IGNORED_IN_COST):
  * 1. Znajduje mapowania produkt-składnik
- * 2. Pobiera aktualną cenę przez getCurrentPrice
- * 3. Przelicza koszt przez calculateIngredientCostPer100g
+ * 2. Pobiera aktualną cenę CAŁEGO opakowania przez getCurrentPrice
+ * 3. Liczy ile opakowań trzeba kupić (packagesNeeded) i mnoży przez cenę
+ *
+ * Koszt to CENA CAŁYCH OPAKOWAŃ, nie ułamek proporcjonalny do ilości w
+ * przepisie — składników nie da się kupić "na wagę dokładnie tyle ile
+ * potrzeba" (potrzeba 30g masła -> kupujesz całą kostkę 200g, płacisz
+ * za całą kostkę). Ta sama zasada co w cartService.ts (koszyk zakupów).
  *
  * Zwraca sumę z tego, co udało się wycenić, nawet jeśli części
  * składników brakuje ceny — brakujące są wypisane w missingPrices,
@@ -129,7 +136,10 @@ export async function calculateRecipeCost(
     const unit = (ri as any).unit;
 
     if (IGNORED_IN_COST.has(ingredientName)) {
-      lines.push({ ingredientId, ingredientName, amount, unit, costPln: null, pricePerUnit: null, storeName: null });
+      lines.push({
+        ingredientId, ingredientName, amount, unit,
+        costPln: null, pricePerUnit: null, packagesNeeded: null, unitAmount: null, storeName: null,
+      });
       continue;
     }
 
@@ -138,21 +148,30 @@ export async function calculateRecipeCost(
 
     let costPln: number | null = null;
     let pricePerUnit: number | null = null;
+    let bestPackagesNeeded: number | null = null;
+    let bestUnitAmount: number | null = null;
     let storeName: string | null = null;
 
-    // Sprawdź WSZYSTKIE mapowania i wybierz najtańszą opcję (nie pierwszą z brzegu)
+    // Sprawdź WSZYSTKIE mapowania i wybierz opcję z najniższym kosztem
+    // CAŁYCH opakowań potrzebnych do pokrycia tego przepisu (nie pierwszą
+    // z brzegu, i nie tę z najniższą ceną za 100g — mały słoiczek droższy
+    // per gram, ale wystarczający w jednym opakowaniu, może wyjść taniej
+    // niż duże opakowanie tańsze per gram).
     for (const mapping of mappings) {
       const storeProductId = (mapping as any).storeProductId as string;
       const price = await getCurrentPrice(storeProductId);
       if (price === null) continue;
 
       const conversionFactor = (mapping as any).conversionFactor ?? 1;
-      const costPer100g = calculateIngredientCostPer100g(price, conversionFactor);
-      const candidateCost = (costPer100g / 100) * amount;
+      const unitAmount = conversionFactor * 100; // gramatura/pojemność całego opakowania
+      const pkgs = packagesNeeded(amount, unitAmount);
+      const candidateCost = pkgs * price;
 
       if (costPln === null || candidateCost < costPln) {
         costPln = candidateCost;
         pricePerUnit = price;
+        bestPackagesNeeded = pkgs;
+        bestUnitAmount = unitAmount;
         try {
           const product = await database.get('store_products').find(storeProductId);
           const storeId = (product as any).storeId as string;
@@ -171,7 +190,10 @@ export async function calculateRecipeCost(
       totalCost += costPln;
     }
 
-    lines.push({ ingredientId, ingredientName, amount, unit, costPln, pricePerUnit, storeName });
+    lines.push({
+      ingredientId, ingredientName, amount, unit,
+      costPln, pricePerUnit, packagesNeeded: bestPackagesNeeded, unitAmount: bestUnitAmount, storeName,
+    });
   }
 
   const portions = recipe.portions ?? 1;

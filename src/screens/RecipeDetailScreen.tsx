@@ -83,7 +83,13 @@ export function RecipeDetailScreen({ route }: Props) {
         <View key={line.ingredientId} style={s.ingredientRow}>
           <View style={{ flex: 1 }}>
             <Text style={s.ingredientName}>{line.ingredientName}</Text>
-            {line.storeName && <Text style={s.ingredientStore}>{line.storeName}</Text>}
+            {line.storeName && (
+              <Text style={s.ingredientStore}>
+                {line.storeName}
+                {line.packagesNeeded != null && line.unitAmount != null &&
+                  ` · kup ${line.packagesNeeded}× opak. (${Math.round(line.unitAmount)}${line.unit})`}
+              </Text>
+            )}
           </View>
           <Text style={s.ingredientAmt}>{line.amount} {line.unit}</Text>
           <Text style={[s.ingredientCost, !line.costPln && s.noCost]}>

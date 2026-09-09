@@ -14,17 +14,23 @@ Odtworzona logika (musi zostać zsynchronizowana ręcznie, jeśli TS się
 zmieni — to jednorazowy skrypt diagnostyczny, nie część aplikacji):
 - calculateRecipeCost (recipeService.ts): dla każdego składnika przepisu
   (poza IGNORED_IN_COST, np. "sól" — te w ogóle pomijamy, bez sprawdzania
-  ceny) sprawdza WSZYSTKIE ingredient_mappings i wybiera najtańszą opcję.
-  Koszt całkowity/na porcję pokazujemy, gdy ChoCIAŻ JEDEN składnik ma
-  cenę (hasAnyCost) — nie wymagamy już 100% pokrycia (patrz commit
-  wprowadzający IGNORED_IN_COST/hasAnyCost).
+  ceny) sprawdza WSZYSTKIE ingredient_mappings i wybiera opcję z
+  najniższym kosztem CAŁYCH opakowań potrzebnych do pokrycia przepisu
+  (packagesNeeded * cena opakowania) — NIE ułamek proporcjonalny do
+  ilości (składników nie da się kupić "dokładnie na wagę"; 30g masła
+  oznacza kupno całej kostki, np. 200g). Koszt całkowity/na porcję
+  pokazujemy, gdy CHOCIAŻ JEDEN składnik ma cenę (hasAnyCost) — nie
+  wymagamy już 100% pokrycia (patrz commit wprowadzający
+  IGNORED_IN_COST/hasAnyCost).
 - getCurrentPrice (priceService.ts): najpierw source='flyer' z
   valid_to >= dziś, inaczej najnowszy wpis wg updated_at. Realne
   scrapery piszą source='flyer-ocr'/'flyer-ssr'/'shop-regular' (nie
   dosłownie 'flyer'), więc w praktyce zawsze trafia gałąź fallback — to
   obserwacja o faktycznym zachowaniu apki, nie coś co ten skrypt naprawia.
-- calculateIngredientCostPer100g: grossPrice / conversionFactor.
+- packagesNeeded (ingredientService.ts): ceil(amount / unitAmount), gdzie
+  unitAmount = conversion_factor * 100 (gramatura/pojemność opakowania).
 """
+import math
 import sys
 from datetime import datetime, timezone
 
@@ -85,6 +91,8 @@ def calculate_recipe_cost(recipe_title_like: str):
         best_price = None
         best_store = None
         best_source = None
+        best_packages = None
+        best_unit_amount = None
 
         for mapping in mappings_res.data:
             store_product_id = mapping["store_product_id"]
@@ -93,13 +101,16 @@ def calculate_recipe_cost(recipe_title_like: str):
                 continue
 
             conversion_factor = mapping.get("conversion_factor") or 1
-            cost_per_100g = price / conversion_factor if conversion_factor > 0 else 0
-            candidate_cost = (cost_per_100g / 100) * amount
+            unit_amount = conversion_factor * 100  # gramatura/pojemność opakowania
+            packages = math.ceil(amount / unit_amount) if unit_amount > 0 else 1
+            candidate_cost = packages * price
 
             if best_cost is None or candidate_cost < best_cost:
                 best_cost = candidate_cost
                 best_price = price
                 best_source = source
+                best_packages = packages
+                best_unit_amount = unit_amount
                 sp_res = sb.table("store_products").select("*, stores(name)").eq("id", store_product_id).execute()
                 if sp_res.data:
                     store_info = sp_res.data[0].get("stores")
@@ -112,7 +123,8 @@ def calculate_recipe_cost(recipe_title_like: str):
             total_cost += best_cost
             lines.append(
                 f"  ✓ {ingredient_name} ({amount}{ri['unit']}): {best_cost:.2f} zł "
-                f"[{best_store}, {best_price} zł/opak., source={best_source}]"
+                f"[{best_store}, kup {best_packages}x opak. ({best_unit_amount:g}{ri['unit']}) "
+                f"@ {best_price} zł/opak., source={best_source}]"
             )
 
     for line in lines:

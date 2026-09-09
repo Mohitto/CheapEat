@@ -11,6 +11,7 @@ import database from '../model/database';
 import { getRecipeIngredients, IGNORED_IN_COST } from './recipeService';
 import { getMappingsByIngredient } from './mappingService';
 import { getCurrentPrice } from './priceService';
+import { packagesNeeded } from './ingredientService';
 
 // ---------------------------------------------------------------------------
 // Typy
@@ -86,15 +87,6 @@ function mergeIngredientNeeds(
     }
   }
   return merged;
-}
-
-/**
- * Oblicza ile opakowań (packagesNeeded) trzeba kupić,
- * żeby pokryć zapotrzebowanie.
- */
-function packagesNeeded(neededGrams: number, unitAmount: number): number {
-  if (unitAmount <= 0) return 1;
-  return Math.ceil(neededGrams / unitAmount);
 }
 
 // ---------------------------------------------------------------------------
