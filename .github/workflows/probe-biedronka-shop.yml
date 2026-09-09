@@ -37,7 +37,7 @@ jobs:
           sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
           sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
 
-      - name: Probe flyer page layout (word boxes vs prices)
+      - name: Probe OCR settings (segmentation mode vs upscaling)
         env:
           PYTHONUNBUFFERED: '1'
-        run: python probe_flyer_layout.py
+        run: python probe_ocr_settings.py
