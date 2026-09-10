@@ -103,6 +103,18 @@ export function FeedScreen() {
                       <Text style={s.noPrice}>brak cen</Text>
                     )}
                   </View>
+
+                  {/* Cena wyżej to najtańszy możliwy koszyk, czasem zebrany z
+                      dwóch sklepów. Druga liczba mówi, ile to kosztuje bez
+                      objazdu — bez niej pierwsza obiecuje trochę za dużo. */}
+                  {cost?.singleStore?.totalCostPln != null && (
+                    <Text style={s.singleStore}>
+                      w jednym sklepie: {cost.singleStore.totalCostPln.toFixed(2)} zł
+                      {cost.singleStore.storeNames.length > 0
+                        ? ` (${cost.singleStore.storeNames.join(' + ')})`
+                        : ''}
+                    </Text>
+                  )}
                 </View>
               </TouchableOpacity>
             );
@@ -128,6 +140,7 @@ const s = StyleSheet.create({
   header:       { fontSize: 24, fontWeight: '700', marginBottom: 10, color: '#111' },
   search:       { backgroundColor: '#f0f0f0', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9, fontSize: 15, color: '#111' },
   list:         { padding: 12, paddingBottom: 24 },
+  singleStore:  { fontSize: 12, color: '#999', marginTop: 2 },
   card:         { backgroundColor: '#fff', borderRadius: 12, marginBottom: 12, overflow: 'hidden', elevation: 2 },
   img:          { width: '100%', height: 180 },
   imgPlaceholder: { justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f0f0' },
