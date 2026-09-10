@@ -47,8 +47,11 @@ jobs:
           sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
           sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
 
-      - name: Does tiling the page unlock the big prices
+      - name: Install EasyOCR (open source, CPU only)
+        run: pip install easyocr
+
+      - name: Can any free OCR engine read the prices
         env:
           PYTHONUNBUFFERED: '1'
-        run: python probe_page_tiles.py "${{ inputs.slug || 'codziennie' }}" "${{ inputs.page || '0' }}"
+        run: python probe_ocr_engines.py "${{ inputs.slug || 'codziennie' }}" "${{ inputs.page || '0' }}"
 
