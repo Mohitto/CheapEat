@@ -7,9 +7,10 @@ stron). Jedyna droga to OCR, i to on jest rdzeniem cen promocyjnych w tej
 aplikacji:
 
   1. biedronka/flyers.py — WSZYSTKIE gazetki z /pl/gazetki wraz z okresem
-     obowiązywania (data startu jest w slugu adresu). Czytamy tylko te
-     obowiązujące dzisiaj, więc wydanie zapowiedziane na przyszły tydzień
-     nie zaniża cen, a wygasłe znikają same.
+     obowiązywania (data startu jest w slugu adresu). Czytamy też wydania
+     zapowiedziane ("OD CZWARTKU"), ale zapisujemy je z ich prawdziwą datą
+     startu — apka pokaże taką cenę dopiero, gdy zacznie obowiązywać, a
+     wygasłe znikają same.
   2. Strona press,id,... zawiera window.galleryLeaflet.init("{UUID}"),
      a leaflet-api pod tym UUID-em zwraca adresy obrazków stron.
   3. biedronka/leaflet_ocr.py — tesseract (darmowy, open-source: projekt
@@ -29,6 +30,7 @@ brakująca cena niż pewna siebie zła cena.
 import os
 import re
 import sys
+from datetime import date, timedelta
 
 import requests
 
@@ -36,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_scraper import get_or_create, get_supabase, replace_price
 from ingredient_catalog import INGREDIENT_DEFAULTS, INGREDIENT_KEYWORDS
 
-from .flyers import active_flyers
+from .flyers import scrapable_flyers
 from .leaflet_ocr import extract_candidates, ocr_page
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
@@ -85,21 +87,23 @@ class BiedronkaScraper:
         )
 
     def scrape(self) -> dict:
-        """Czyta WSZYSTKIE gazetki obowiązujące dzisiaj.
+        """Czyta gazetki obowiązujące dzisiaj ORAZ już zapowiedziane.
 
-        Wcześniej brana była jedna gazetka wybrana po nazwie, przez co
-        (a) trafialiśmy w wydanie zaczynające się dopiero za kilka dni,
-        czyli w ceny jeszcze nieobowiązujące, i (b) w ogóle nie
-        otwieraliśmy gazetek tematycznych ("festiwal nabiału"), gdzie
-        siedzi część promocji na nasze składniki."""
-        flyers = active_flyers()
+        Wcześniej otwieraliśmy wyłącznie gazetki obowiązujące dzisiaj.
+        Brzmi ostrożnie, a w praktyce oznaczało, że 9 września główna,
+        96-stronicowa gazetka "oferta od 10.09" — z masłem po 1,99 na
+        pierwszej stronie — nie była czytana w ogóle. Teraz czytamy ją od
+        razu, ale każda cena dostaje prawdziwą datę startu, więc apka
+        pokaże ją dopiero od 10.09 (patrz priceService.getCurrentPriceInfo)."""
+        flyers = scrapable_flyers()
         if not flyers:
-            print("[Biedronka] Brak gazetek obowiązujących dzisiaj")
+            print("[Biedronka] Brak gazetek do przeczytania")
             return {"flyers": 0, "pages_scanned": 0, "ingredients_found": 0, "saved": 0}
 
-        print(f"[Biedronka] Gazetki obowiązujące dzisiaj: {len(flyers)}")
+        print(f"[Biedronka] Gazetki do przeczytania: {len(flyers)}")
         for f in flyers:
-            print(f"[Biedronka]   {f['slug']}: {f['valid_from']} .. {f['valid_to']}")
+            kiedy = "zapowiedziana" if f["is_upcoming"] else "obowiązuje"
+            print(f"[Biedronka]   {f['slug']}: {f['valid_from']} .. {f['valid_to']} ({kiedy})")
 
         found_per_ingredient: dict[str, dict] = {}
         pages_scanned = 0
@@ -135,18 +139,27 @@ class BiedronkaScraper:
                           f"{' | '.join(t.text for t in interesting[:120])}")
 
                 for c in extract_candidates(tokens, page_width, debug=DEBUG):
-                    name = c["ingredient_name"]
-                    # Ten sam składnik potrafi być w kilku gazetkach naraz —
-                    # zostaje najtańsza oferta, bo taką realnie się wybierze.
-                    previous = found_per_ingredient.get(name)
+                    # Klucz obejmuje WARIANT oferty, nie samą kategorię.
+                    # Promocja warunkowa ("5 kostek masła po 1,99") ma
+                    # niższą cenę jednostkową niż pojedyncza kostka, więc
+                    # przy kluczowaniu samą nazwą wypychała ją z bazy — a
+                    # do przepisu na 30 g masła nikt nie kupi pięciu
+                    # kostek. Oba warianty trafiają do bazy obok siebie i
+                    # to apka wybiera tańszy dla konkretnej ilości.
+                    key = (c["ingredient_name"], c["bundle_units"], c["sold_loose"])
+                    previous = found_per_ingredient.get(key)
                     if previous is None or c["unit_price"] < previous["unit_price"]:
-                        found_per_ingredient[name] = {**c, "flyer": flyer}
-                        print(f"[Biedronka] {flyer['slug']} s.{i}: {name} -> "
+                        found_per_ingredient[key] = {**c, "flyer": flyer}
+                        print(f"[Biedronka] {flyer['slug']} s.{i}: {c['ingredient_name']} -> "
                               f"{c['package_price']} zł za {c['unit_amount']:g}{c['unit']} "
-                              f"({round(c['unit_price'], 4)} zł/j.)")
+                              f"({round(c['unit_price'], 4)} zł/j.)"
+                              + (f" [przy zakupie {c['bundle_units']} szt.]"
+                                 if c["bundle_units"] > 1 else "")
+                              + (" [na wagę]" if c["sold_loose"] else ""))
 
         if DEBUG:
-            missing = [n for n in INGREDIENT_KEYWORDS if n not in found_per_ingredient]
+            priced = {key[0] for key in found_per_ingredient}
+            missing = [n for n in INGREDIENT_KEYWORDS if n not in priced]
             print(f"[Biedronka] Kategorie bez ceny w gazetkach: {missing}")
 
         saved = self._save(found_per_ingredient)
@@ -157,28 +170,23 @@ class BiedronkaScraper:
             "saved": saved,
         }
 
-    def _save(self, found_per_ingredient: dict[str, dict]) -> int:
+    def _save(self, found_per_ingredient: dict[tuple, dict]) -> int:
         if not found_per_ingredient:
             return 0
 
         saved = 0
 
-        for ingredient_name, c in found_per_ingredient.items():
+        for (ingredient_name, bundle_units, sold_loose), c in found_per_ingredient.items():
             unit, unit_amount = c["unit"], c["unit_amount"]
-            # Ważność ceny bierzemy z gazetki, w której ją znaleźliśmy —
-            # nie ze sztywnego "dziś + 3 dni". Dzięki temu promocja wygasa
-            # dokładnie wtedy, kiedy kończy się gazetka, a apka wraca do
-            # ceny regularnej ze sklepu.
             flyer = c["flyer"]
-            valid_from = flyer["valid_from"].isoformat()
-            valid_to = flyer["valid_to"].isoformat()
+            valid_from, valid_to = _validity(c, flyer)
 
             ingredient_id = get_or_create(
                 self.sb, "ingredients", {"name": ingredient_name},
                 INGREDIENT_DEFAULTS.get(ingredient_name, {}),
             )
 
-            product_name = f"{ingredient_name.capitalize()} Biedronka (gazetka)"
+            product_name = _product_name(ingredient_name, c)
             store_product_id = get_or_create(
                 self.sb, "store_products",
                 {"store_id": self.store_id, "name": product_name},
@@ -208,6 +216,59 @@ class BiedronkaScraper:
             saved += 1
 
         return saved
+
+
+def _product_name(ingredient_name: str, c: dict) -> str:
+    """Nazwa produktu sklepowego opisująca WARIANT oferty.
+
+    Nazwa musi rozróżniać warianty, bo to po niej scraper odnajduje
+    (get_or_create) swój wiersz — gdyby kostka masła i pakiet pięciu
+    kostek nazywały się tak samo, każdy przebieg nadpisywałby jeden
+    wariant drugim. Przy okazji użytkownik widzi wprost, na czym polega
+    oferta, zamiast niewytłumaczalnie niskiej ceny."""
+    label = [f"{ingredient_name.capitalize()} Biedronka (gazetka"]
+    if c["bundle_units"] > 1:
+        single = c["unit_amount"] / c["bundle_units"]
+        label.append(f", {c['bundle_units']}x{single:g}{c['unit']} po {c['single_price']:.2f} zł")
+    if c["sold_loose"]:
+        label.append(", na wagę")
+    if c["loyalty"]:
+        label.append(", z kartą")
+    return "".join(label) + ")"
+
+
+def _validity(c: dict, flyer: dict) -> tuple[str, str]:
+    """Okres obowiązywania ceny: z KAFELKA, gdy gazetka go wydrukowała
+    ("OFERTA OD 10.09 DO 12.09"), inaczej z całej gazetki.
+
+    Gazetka trwa tydzień, ale pojedyncza promocja bywa trzydniowa —
+    bez daty z kafelka cena wisiałaby w apce jeszcze po jej wygaśnięciu,
+    zamiast wrócić do ceny sprzed promocji."""
+    tile_from = _tile_date(c.get("valid_from"), flyer["valid_from"])
+    tile_to = _tile_date(c.get("valid_to"), flyer["valid_from"])
+    if tile_from and tile_to and tile_from <= tile_to:
+        # Data z kafelka odczytana przez OCR bywa przekręcona; ufamy jej
+        # tylko wtedy, gdy trzyma się okolic gazetki, w której stoi.
+        if abs((tile_from - flyer["valid_from"]).days) <= 14:
+            return tile_from.isoformat(), tile_to.isoformat()
+    return flyer["valid_from"].isoformat(), flyer["valid_to"].isoformat()
+
+
+def _tile_date(day_month: tuple[int, int] | None, reference: date) -> date | None:
+    """(dzień, miesiąc) z kafelka -> data. Rok bierzemy z gazetki, w
+    której kafelek stoi; przy przełomie roku (gazetka grudniowa z ofertą
+    "od 02.01") przesuwamy o rok do przodu."""
+    if not day_month:
+        return None
+    day, month = day_month
+    for year in (reference.year, reference.year + 1):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            return None
+        if candidate >= reference - timedelta(days=14):
+            return candidate
+    return None
 
 
 if __name__ == "__main__":

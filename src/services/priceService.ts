@@ -12,6 +12,10 @@ export type PriceInfo = {
   isPromo: boolean;
   /** Cena regularna, gdy promocja jest tańsza — do pokazania "było / jest". */
   regularPricePln: number | null;
+  /** Ostatni dzień obowiązywania (YYYY-MM-DD) — "promocja do 12.09". */
+  validTo: string | null;
+  /** Promocja, która jeszcze nie wystartowała, ale jest już w gazetce. */
+  upcoming: { grossPricePln: number; startsOn: string } | null;
 };
 
 /**
@@ -54,6 +58,18 @@ export async function getCurrentPriceInfo(
     .filter(p => PROMO_SOURCES.includes(p.source) && isCurrentlyValid(p))
     .sort(newestFirst)[0];
 
+  // Gazetkę czytamy, gdy tylko Biedronka ją opublikuje — a robi to kilka
+  // dni przed startem ("OD CZWARTKU"). Taka cena NIE jest ceną na dziś,
+  // więc nie wchodzi do rachunku; pokazujemy ją osobno, żeby dało się
+  // napisać "od 10.09 masło 1,99".
+  const upcomingPromo = prices
+    .filter(p => PROMO_SOURCES.includes(p.source) && p.validFrom != null && p.validFrom > today)
+    .sort((a, b) => (a.validFrom! < b.validFrom! ? -1 : 1))[0];
+  const upcoming =
+    upcomingPromo?.grossPrice != null
+      ? { grossPricePln: upcomingPromo.grossPrice, startsOn: upcomingPromo.validFrom! }
+      : null;
+
   if (promo?.grossPrice != null) {
     return {
       grossPricePln: promo.grossPrice,
@@ -63,6 +79,8 @@ export async function getCurrentPriceInfo(
       // jest od niej tańsza — inaczej pokazywalibyśmy mylące "było taniej".
       regularPricePln:
         regularPricePln != null && regularPricePln > promo.grossPrice ? regularPricePln : null,
+      validTo: promo.validTo ?? null,
+      upcoming,
     };
   }
 
@@ -72,6 +90,8 @@ export async function getCurrentPriceInfo(
       source: regular.source,
       isPromo: false,
       regularPricePln: null,
+      validTo: regular.validTo ?? null,
+      upcoming,
     };
   }
 

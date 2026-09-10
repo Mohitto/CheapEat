@@ -58,9 +58,11 @@ def cleanup_mismatched_products() -> int:
             continue
         product_name = sp[0]["name"]
 
-        # Produkty gazetkowe mają nazwę generowaną przez nas
-        # ("Masło Biedronka (gazetka)"), nie nazwę handlową — te zostawiamy.
-        if "(gazetka)" in product_name:
+        # Produkty gazetkowe mają nazwę generowaną przez nas, nie nazwę
+        # handlową — te zostawiamy. Dopasowujemy po samym "(gazetka",
+        # bo nazwa opisuje też wariant oferty: "Masło Biedronka
+        # (gazetka, 5x200g po 1.99 zł, z kartą)".
+        if "(gazetka" in product_name:
             continue
 
         matched = match_ingredient(strip_suffix(product_name))

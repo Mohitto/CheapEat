@@ -37,6 +37,9 @@ jobs:
           sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
           sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
 
+      - name: Test flyer tile reading (no network)
+        run: python test_leaflet_ocr.py
+
       - name: Purge bad/stale price rows
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

@@ -29,6 +29,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ingredient_catalog import (
+    fold,
     fuzzy_ingredient,
     is_plausible,
     unit_for,
@@ -135,7 +136,7 @@ def find_prices(tokens: list[Token], page_width: int) -> list[tuple[Token, float
 
     for i, t in enumerate(tokens):
         m = FULL_PRICE.match(t.text)
-        if m:
+        if m and not _is_date(t, tokens, page_width):
             found.append((t, float(f"{m.group(1)}.{m.group(2)}")))
             used.add(i)
 
@@ -159,6 +160,37 @@ def find_prices(tokens: list[Token], page_width: int) -> list[tuple[Token, float
 
     found.extend(_find_glued_prices(tokens, used, page_width))
     return found
+
+
+# Daty na gazetce wyglądają dokładnie jak ceny: "OFERTA OD 10.09 DO
+# 12.09" to dla wzorca ceny dwie kwoty, 10,09 zł i 12,09 zł. Brane za
+# ceny trafiały do bazy jako całkiem wiarygodne (masło 10,09 zł za 200 g
+# mieści się w każdym rozsądnym zakresie), więc żadna kontrola dalej ich
+# nie łapała — jedyne miejsce, gdzie widać różnicę, to sąsiedztwo słów
+# "od"/"do"/"oferta".
+DATE_LIKE = re.compile(r'^(\d{1,2})\.(\d{2})$')
+DATE_NEIGHBOURS = {"od", "do", "oferta", "-"}
+
+
+def _is_date(token: Token, tokens: list[Token], page_width: int) -> bool:
+    m = DATE_LIKE.match(token.text)
+    if not m or not 1 <= int(m.group(2)) <= 12:
+        return False
+
+    max_gap = page_width * 0.06
+    for other in tokens:
+        if other is token:
+            continue
+        if abs(other.cy - token.cy) > token.height:
+            continue
+        gap = max(other.left - (token.left + token.width),
+                  token.left - (other.left + other.width))
+        if gap > max_gap:
+            continue
+        if (fold(other.text.strip(".,"), ocr_digits=False) in DATE_NEIGHBOURS
+                or DATE_LIKE.match(other.text)):
+            return True
+    return False
 
 
 def _find_glued_prices(tokens: list[Token], used: set[int],
@@ -224,7 +256,13 @@ SPEC_NUMBER = re.compile(r'^\d+(?:[.,]\d+)?$')
 SPEC_UNIT = re.compile(r'^(kg|g|ml|l|szt)\.?$', re.IGNORECASE)
 
 MAX_NAME_DISTANCE_RATIO = 0.22   # ułamek szerokości strony
-MAX_SPEC_DISTANCE_RATIO = 0.18
+# Gramatura stoi na końcu opisu produktu ("Masło Ekstra z Polskiej
+# Mleczarni, 200 g"), więc od wielkiej ceny nad opisem dzieli ją cała
+# szerokość tego opisu — przy 0.18 realny kafelek masła z pierwszej
+# strony gazetki wypadał jako "brak gramatury w pobliżu". Mierzymy do
+# BLIŻSZEGO z dwóch punktów kafelka (cena albo nazwa produktu), bo
+# gramatura należy do opisu, nie do ceny.
+MAX_SPEC_DISTANCE_RATIO = 0.22
 
 
 def _normalise_spec(amount: float, unit: str) -> tuple[str, float]:
@@ -266,16 +304,26 @@ def _find_specs(tokens: list[Token], page_width: int) -> list[tuple[Token, str, 
     return specs
 
 
-def _is_unit_price(price_token: Token, tokens: list[Token], page_width: int) -> bool:
-    """Czy ta cena to cena za kilogram/litr podana drobnym drukiem obok
-    ceny opakowania. Brana za kwotę do zapłaty produkowała absurdy w
-    rodzaju "masło 54,90 zł" (to była cena za kg) czy "jajka 199,50 zł"."""
-    if UNIT_PRICE_INLINE.search(price_token.text):
-        return True
+def unit_price_scale(price_token: Token, tokens: list[Token],
+                     page_width: int) -> str | None:
+    """Skala ceny jednostkowej dopisanej przy kwocie ("kg", "l", "szt",
+    "100") albo None, gdy to zwykła cena opakowania.
+
+    Wcześniej ta funkcja zwracała tylko True/False i taka cena szła do
+    kosza. To poprawnie chroniło przed absurdami w rodzaju "masło 54,90
+    zł" (cena za kilogram wzięta za cenę kostki), ale przy okazji
+    wyrzucało produkty sprzedawane NA WAGĘ, gdzie cena za kilogram jest
+    jedyną, jaka na gazetce istnieje (papryka 5,99/kg, filet z kurczaka
+    14,99/kg). Teraz rozróżniamy te dwa przypadki: patrz
+    extract_candidates."""
+    m = UNIT_PRICE_INLINE.search(price_token.text)
+    if m:
+        return m.group(2).lower()
 
     max_gap = page_width * 0.05
     for t in tokens:
-        if t is price_token or not UNIT_PRICE_SUFFIX.match(t.text):
+        m = UNIT_PRICE_SUFFIX.match(t.text)
+        if t is price_token or not m:
             continue
         if t.left < price_token.left:
             continue
@@ -283,17 +331,133 @@ def _is_unit_price(price_token: Token, tokens: list[Token], page_width: int) -> 
             continue
         if abs(t.top - price_token.top) > price_token.height:
             continue
-        return True
-    return False
+        return m.group(2).lower()
+    return None
+
+
+def _is_unit_price(price_token: Token, tokens: list[Token], page_width: int) -> bool:
+    return unit_price_scale(price_token, tokens, page_width) is not None
+
+
+# Cena "za kilogram" produktu sprzedawanego na wagę to w praktyce cena za
+# gram — kupujesz dokładnie tyle, ile trzeba. Modelujemy to jako
+# opakowanie o wielkości 1 g/1 ml, dzięki czemu reszta apki (koszt =
+# liczba opakowań * cena opakowania) liczy taki składnik proporcjonalnie,
+# bez żadnego wyjątku w kodzie: 300 g piersi z kurczaka to 300 "opakowań"
+# po 1 g. Dla produktów pakowanych zasada pozostaje bez zmian — 30 g
+# masła oznacza całą kostkę.
+LOOSE_SCALE_UNIT = {"kg": "g", "l": "ml"}
+
+
+# ---------------------------------------------------------------------------
+# Kontekst kafelka: warunki promocji i okres obowiązywania
+# ---------------------------------------------------------------------------
+
+# Promocja warunkowa ("PRZY ZAKUPIE 5 ... KAŻDA Z 5 SZTUK 1,99") to NIE
+# jest cena jednej sztuki — żeby ją dostać, trzeba wyjść ze sklepu z
+# pięcioma kostkami masła. Zapisanie 1,99 jako ceny kostki byłoby po
+# prostu nieprawdą. Traktujemy taką ofertę jak WIĘKSZE OPAKOWANIE
+# (5 x 200 g za 9,95 zł) i zapisujemy obok zwykłej kostki: apka sama
+# wybierze tańszy wariant dla konkretnego przepisu, a przy 30 g masła
+# uczciwie zostanie przy pojedynczej kostce.
+BUNDLE_X_PLUS_Y = re.compile(r'\b(\d)\s*\+\s*(\d)\s*gratis\b')
+BUNDLE_PRZY_ZAKUPIE = re.compile(r'\bprzy\s+zakupi[eu]\s+(\d)\b')
+BUNDLE_KAZDA_Z = re.compile(r'\bkazd[aey]\s*z\s*(\d)\s*szt')
+# "OFERTA OD 10.09 DO 12.09" — gazetka trwa tydzień, ale pojedyncza
+# promocja bywa krótsza. Data z kafelka jest dokładniejsza niż data
+# całej gazetki, więc cena wygasa wtedy, kiedy naprawdę wygasa.
+OFFER_PERIOD = re.compile(
+    r'\bod\s+(\d{1,2})[.,](\d{1,2})\s+do\s+(\d{1,2})[.,](\d{1,2})\b')
+# Promocje "z kartą lub apką" wymagają karty Moja Biedronka — cena bez
+# niej jest inna, więc apka musi to napisać wprost.
+LOYALTY = re.compile(r'\bz\s+kart|moja\s+biedronka|\bz\s+apk')
+
+# Dwa promienie, bo dwa różne ryzyka. Warunek promocji ("przy zakupie
+# 5") ZMIENIA CENĘ, więc wolno go czytać tylko z bezpośredniego
+# otoczenia kwoty — wciągnięty z sąsiedniego kafelka zepsułby ją.
+# Data obowiązywania zmienia tylko okres ważności i stoi w rogu
+# kafelka, daleko od ceny, więc tu opłaca się szukać szerzej.
+TILE_RADIUS_RATIO = 0.16
+PERIOD_RADIUS_RATIO = 0.28
+
+
+def tile_text(price_token: Token, tokens: list[Token], page_width: int,
+              radius_ratio: float = TILE_RADIUS_RATIO) -> str:
+    """Tekst kafelka wokół ceny, złożony w kolejności czytania i
+    znormalizowany (bez polskich znaków, małymi literami).
+
+    Warunki promocji są rozsypane po kilku tokenach ("PRZY", "ZAKUPIE",
+    "5"), więc regexy stosujemy do sklejonego tekstu, a nie do
+    pojedynczych słów. Kolejność musi być czytelniczo poprawna: przy
+    naiwnym sortowaniu po (wysokość // stała, lewa krawędź) wiersze
+    kafelka przeplatały się ze sobą ("przy 66% kazda taniej zakupie")
+    i żaden warunek się nie dopasowywał — dlatego wiersze wyznaczamy
+    przez grupowanie, a nie przez dzielenie współrzędnej."""
+    radius = page_width * radius_ratio
+    near = [t for t in tokens if price_token.distance_to(t) <= radius]
+    if not near:
+        return ""
+
+    heights = sorted(t.height for t in near)
+    line_gap = max(1, heights[len(heights) // 2])
+
+    near.sort(key=lambda t: t.cy)
+    rows: list[list[Token]] = [[near[0]]]
+    for t in near[1:]:
+        if t.cy - rows[-1][-1].cy > line_gap:
+            rows.append([])
+        rows[-1].append(t)
+
+    words = []
+    for row in rows:
+        row.sort(key=lambda t: t.left)
+        words.extend(t.text for t in row)
+    return fold(" ".join(words), ocr_digits=False)
+
+
+def find_bundle(text: str) -> dict | None:
+    """Warunek "kup N sztuk" wyczytany z kafelka: ile sztuk trzeba wziąć
+    (`total_units`) i za ile z nich się płaci (`paid_units`)."""
+    m = BUNDLE_X_PLUS_Y.search(text)
+    if m:
+        paid, free = int(m.group(1)), int(m.group(2))
+        if 1 <= paid <= 5 and 1 <= free <= 3:
+            return {"paid_units": paid, "total_units": paid + free}
+
+    for pattern in (BUNDLE_PRZY_ZAKUPIE, BUNDLE_KAZDA_Z):
+        m = pattern.search(text)
+        if m:
+            n = int(m.group(1))
+            if 2 <= n <= 6:
+                return {"paid_units": n, "total_units": n}
+    return None
+
+
+def find_offer_period(text: str) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """((dzień, miesiąc) od, (dzień, miesiąc) do) z napisu na kafelku."""
+    m = OFFER_PERIOD.search(text)
+    if not m:
+        return None
+    d1, m1, d2, m2 = (int(g) for g in m.groups())
+    if not (1 <= d1 <= 31 and 1 <= m1 <= 12 and 1 <= d2 <= 31 and 1 <= m2 <= 12):
+        return None
+    return ((d1, m1), (d2, m2))
 
 
 def extract_candidates(tokens: list[Token], page_width: int, debug: bool = False) -> list[dict]:
-    """Ceny promocyjne wyciągnięte ze strony gazetki: każdą cenę wiążemy
-    z NAJBLIŻSZĄ przestrzennie nazwą składnika i najbliższą gramaturą.
+    """Oferty wyciągnięte ze strony gazetki: każdą cenę wiążemy z
+    NAJBLIŻSZĄ przestrzennie nazwą składnika, gramaturą i tekstem
+    kafelka (warunki promocji, daty).
 
-    Zwraca listę {ingredient_name, package_price, unit, unit_amount,
-    unit_price} — tylko dopasowania, które przeszły kontrolę
-    prawdopodobieństwa ceny."""
+    Zwraca listę słowników:
+      ingredient_name, package_price, unit, unit_amount, unit_price,
+      bundle_units (ile sztuk trzeba kupić; 1 = zwykłe opakowanie),
+      single_price (cena jednej sztuki w ofercie warunkowej),
+      loyalty (czy wymaga karty Moja Biedronka),
+      sold_loose (produkt na wagę — koszt liczy się proporcjonalnie),
+      valid_from / valid_to jako (dzień, miesiąc) albo None,
+      _name_token (do odsiania duplikatów, patrz niżej).
+    """
     names = [(t, ing) for t in tokens if (ing := fuzzy_ingredient(t.text))]
     if not names:
         return []
@@ -304,9 +468,6 @@ def extract_candidates(tokens: list[Token], page_width: int, debug: bool = False
 
     candidates: list[dict] = []
     for price_token, amount_pln in find_prices(tokens, page_width):
-        if _is_unit_price(price_token, tokens, page_width):
-            continue
-
         name_token, ingredient_name, name_distance = None, None, None
         for t, ing in names:
             d = price_token.distance_to(t)
@@ -320,16 +481,45 @@ def extract_candidates(tokens: list[Token], page_width: int, debug: bool = False
         for t, unit, spec_amount in specs:
             if unit != base_unit:
                 continue
-            d = price_token.distance_to(t)
+            d = min(price_token.distance_to(t), name_token.distance_to(t))
             if spec_distance is None or d < spec_distance:
                 best_spec, spec_distance = (unit, spec_amount), d
-        if best_spec is None or spec_distance > max_spec_distance:
+        has_spec = best_spec is not None and spec_distance <= max_spec_distance
+
+        # Cena z dopiskiem "/kg" obok ceny opakowania to drobny druk, nie
+        # kwota do zapłaty — ale przy produkcie NA WAGĘ jest jedyną ceną,
+        # jaka na gazetce w ogóle istnieje. Rozróżniamy je po tym, czy
+        # obok jest gramatura opakowania: jest — to produkt pakowany i
+        # cena za kilogram jest tylko informacją; nie ma — to waga.
+        scale = unit_price_scale(price_token, tokens, page_width)
+        sold_loose = False
+        if scale is not None:
+            if has_spec or LOOSE_SCALE_UNIT.get(scale) != base_unit:
+                if debug:
+                    print(f"      [gazetka] pomijam {amount_pln} zł/{scale} przy "
+                          f"'{name_token.text}' — to cena jednostkowa, nie cena opakowania")
+                continue
+            sold_loose = True
+            unit, unit_amount = base_unit, 1.0
+            amount_pln = amount_pln / 1000.0
+        elif has_spec:
+            unit, unit_amount = best_spec
+        else:
             if debug:
                 print(f"      [gazetka] {amount_pln} zł przy '{name_token.text}' "
                       f"({ingredient_name}) — brak gramatury w pobliżu, pomijam")
             continue
 
-        unit, unit_amount = best_spec
+        text = tile_text(price_token, tokens, page_width)
+        bundle = None if sold_loose else find_bundle(text)
+        single_price = amount_pln
+        if bundle:
+            # Cena na kafelku dotyczy JEDNEJ sztuki z zestawu; realna
+            # kwota do zapłaty to cena * liczba płatnych sztuk, a
+            # dostajesz total_units sztuk.
+            amount_pln = round(single_price * bundle["paid_units"], 2)
+            unit_amount = unit_amount * bundle["total_units"]
+
         unit_price = unit_price_of(ingredient_name, amount_pln, unit, unit_amount)
         if unit_price is None:
             continue
@@ -341,10 +531,20 @@ def extract_candidates(tokens: list[Token], page_width: int, debug: bool = False
                       f"(poza zakresem wiarygodności)")
             continue
 
+        period = find_offer_period(
+            tile_text(price_token, tokens, page_width, PERIOD_RADIUS_RATIO))
+
         if debug:
+            extra = []
+            if bundle:
+                extra.append(f"przy zakupie {bundle['total_units']} szt.")
+            if sold_loose:
+                extra.append("na wagę")
+            if period:
+                extra.append(f"oferta {period[0][0]}.{period[0][1]}-{period[1][0]}.{period[1][1]}")
             print(f"      [gazetka] {ingredient_name}: {amount_pln} zł za {unit_amount:g}{unit} "
-                  f"(nazwa '{name_token.text}' w {name_distance:.0f}px, "
-                  f"gramatura w {spec_distance:.0f}px)")
+                  f"(nazwa '{name_token.text}' w {name_distance:.0f}px"
+                  + (f", {', '.join(extra)}" if extra else "") + ")")
 
         candidates.append({
             "ingredient_name": ingredient_name,
@@ -352,6 +552,23 @@ def extract_candidates(tokens: list[Token], page_width: int, debug: bool = False
             "unit": unit,
             "unit_amount": unit_amount,
             "unit_price": unit_price,
+            "bundle_units": bundle["total_units"] if bundle else 1,
+            "single_price": single_price,
+            "loyalty": bool(LOYALTY.search(text)),
+            "sold_loose": sold_loose,
+            "valid_from": period[0] if period else None,
+            "valid_to": period[1] if period else None,
+            "_name_token": id(name_token),
         })
 
-    return candidates
+    return _drop_redundant_loose(candidates)
+
+
+def _drop_redundant_loose(candidates: list[dict]) -> list[dict]:
+    """Gdy przy tej samej nazwie odczytaliśmy i cenę opakowania, i cenę
+    za kilogram, cena za kilogram jest tylko drobnym drukiem — produkt
+    jest pakowany, więc kupuje się całe opakowanie. Zostawiamy ją tylko
+    tam, gdzie nic innego przy tej nazwie nie było."""
+    packaged = {c["_name_token"] for c in candidates if not c["sold_loose"]}
+    return [c for c in candidates
+            if not (c["sold_loose"] and c["_name_token"] in packaged)]

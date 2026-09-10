@@ -35,6 +35,12 @@ DEFAULT_DURATION_DAYS = 7
 # Gazetki starsze niż to nie interesują nas nawet jako "poprzednie" —
 # tylko zaśmiecałyby bazę wygasłymi cenami.
 MAX_AGE_DAYS = 30
+# Biedronka publikuje gazetkę na kilka dni przed startem ("OD CZWARTKU").
+# Czytamy ją od razu, ale zapisujemy z jej PRAWDZIWĄ datą startu, więc
+# apka pokaże te ceny dopiero, gdy zaczną obowiązywać. Bez tego główna,
+# 96-stronicowa gazetka była 9 września w ogóle nieotwierana — a to w
+# niej siedzi większość promocji.
+LOOKAHEAD_DAYS = 10
 
 
 def _parse_start_date(slug: str, today: date) -> date | None:
@@ -111,9 +117,31 @@ def discover_flyers(today: date | None = None) -> list[dict]:
 
 
 def active_flyers(today: date | None = None) -> list[dict]:
-    """Gazetki obowiązujące DZISIAJ — te, których ceny wolno pokazywać.
-    Gazetka zapowiedziana na przyszły tydzień jest pomijana: jej ceny
-    jeszcze nie obowiązują w sklepie."""
+    """Gazetki obowiązujące DZISIAJ — te, których ceny wolno pokazywać
+    jako dzisiejszą cenę."""
     today = today or datetime.now().date()
     return [f for f in discover_flyers(today)
             if f["valid_from"] <= today <= f["valid_to"]]
+
+
+def scrapable_flyers(today: date | None = None) -> list[dict]:
+    """Gazetki, które warto DZISIAJ przeczytać: obowiązujące teraz oraz
+    już opublikowane, a startujące w ciągu najbliższych LOOKAHEAD_DAYS.
+
+    Rozdział "czytamy" od "pokazujemy" jest tu celowy. Wcześniej scraper
+    otwierał wyłącznie gazetki obowiązujące dzisiaj, więc wydanie
+    ogłoszone jako "OD CZWARTKU" (a leżące na stronie już we wtorek)
+    było pomijane w całości — razem z promocjami z jego pierwszej strony.
+    Teraz czytamy je od razu, ale każda cena dostaje PRAWDZIWĄ datę
+    startu, a priceService pokazuje ją dopiero, gdy zacznie obowiązywać.
+
+    Każda pozycja dostaje `is_upcoming` — dzięki temu apka może napisać
+    "od 10.09 taniej", zamiast udawać, że to cena na dziś."""
+    today = today or datetime.now().date()
+    horizon = today + timedelta(days=LOOKAHEAD_DAYS)
+    out = []
+    for f in discover_flyers(today):
+        if f["valid_to"] < today or f["valid_from"] > horizon:
+            continue
+        out.append({**f, "is_upcoming": f["valid_from"] > today})
+    return out

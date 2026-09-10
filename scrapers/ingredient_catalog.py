@@ -87,22 +87,30 @@ def unit_for(ingredient_name: str) -> str:
 # spoza tego zakresu jest ODRZUCANE. Lepiej brakująca cena niż pewna
 # siebie zła cena (patrz historia tej sesji: dokładnie ten błąd
 # naprawialiśmy dla wzoru matematycznego, teraz naprawiamy dla OCR).
+#
+# Dolne granice są celowo NISKIE. Ustawione "na oko wokół ceny
+# regularnej" odcinały prawdziwe promocje: masło Ekstra 200 g po 1,99 zł
+# (przy zakupie 5) to 0,995 zł/100 g, czyli tuż pod dawnym progiem 1,0 —
+# realna promocja z pierwszej strony gazetki wypadała jako "niewiarygodna".
+# Gazetkowe -50%/-66% to norma, więc próg musi ją przepuszczać. Zadaniem
+# dolnej granicy jest łapanie zgubionej cyfry (1,99 odczytane jako 0,99
+# przy kilogramie), a nie ocenianie, czy promocja jest "za dobra".
 PLAUSIBLE_UNIT_PRICE: dict[str, tuple[float, float]] = {
-    "mąka pszenna": (0.1, 1.0),
-    "cukier": (0.1, 1.0),
-    "masło": (1.0, 8.0),
-    "ryż": (0.3, 2.0),
-    "kurczak pierś": (1.2, 4.0),
-    "mięso mielone": (1.0, 3.5),
-    "cebula": (0.1, 0.8),
-    "pomidor": (0.3, 2.5),
-    "ser żółty": (1.0, 6.0),
-    "olej rzepakowy": (0.5, 2.5),
-    "sól": (0.1, 0.6),
-    "mleko": (0.2, 1.0),
+    "mąka pszenna": (0.05, 1.0),
+    "cukier": (0.05, 1.0),
+    "masło": (0.5, 8.0),
+    "ryż": (0.15, 2.0),
+    "kurczak pierś": (0.6, 4.0),
+    "mięso mielone": (0.5, 3.5),
+    "cebula": (0.05, 0.8),
+    "pomidor": (0.15, 2.5),
+    "ser żółty": (0.5, 6.0),
+    "olej rzepakowy": (0.3, 2.5),
+    "sól": (0.05, 0.6),
+    "mleko": (0.12, 1.0),
     # za 1 sztukę, nie za 100 g — realne ceny w sklepie to 1,35-1,60 zł/szt,
     # w promocji potrafi zejść poniżej złotówki.
-    "jajka": (0.4, 3.0),
+    "jajka": (0.2, 3.0),
 }
 
 
@@ -132,10 +140,16 @@ _OCR_CONFUSIONS = str.maketrans({"1": "l", "0": "o", "5": "s", "8": "b", "|": "l
 _CASE_SENSITIVE_CONFUSIONS = str.maketrans({"I": "l"})
 
 
-def fold(text: str) -> str:
-    """Postać porównawcza odporna na polskie znaki i typowe pomyłki OCR."""
-    return (text.translate(_CASE_SENSITIVE_CONFUSIONS)
-                .lower().translate(_DIACRITICS).translate(_OCR_CONFUSIONS))
+def fold(text: str, ocr_digits: bool = True) -> str:
+    """Postać porównawcza odporna na polskie znaki i typowe pomyłki OCR.
+
+    `ocr_digits` mapuje cyfry na podobne litery ("1"->"l", "0"->"o") i jest
+    tym, czego potrzeba przy porównywaniu NAZW. Przy czytaniu tekstu, w
+    którym liczby coś znaczą — "PRZY ZAKUPIE 5", "OFERTA OD 10.09" —
+    trzeba go wyłączyć, bo inaczej warunek promocji zamienia się w
+    "przy zakuple s", a data w "lo.o9", i żaden wzorzec ich nie widzi."""
+    folded = text.translate(_CASE_SENSITIVE_CONFUSIONS).lower().translate(_DIACRITICS)
+    return folded.translate(_OCR_CONFUSIONS) if ocr_digits else folded
 
 
 def fuzzy_ingredient(word: str, min_ratio: float = 0.80) -> str | None:
