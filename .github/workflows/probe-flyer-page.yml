@@ -1,0 +1,41 @@
+name: Probe Flyer Page
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Fragment slugu gazetki (np. codziennie)'
+        required: false
+        default: 'codziennie'
+      page:
+        description: 'Numer strony (od 0)'
+        required: false
+        default: '0'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scrapers
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scrapers/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Install Tesseract OCR (pol)
+        run: |
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Probe page
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_flyer_page.py "${{ inputs.slug }}" "${{ inputs.page }}"
