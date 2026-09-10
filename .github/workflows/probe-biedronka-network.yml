@@ -47,12 +47,8 @@ jobs:
           sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
           sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
 
-      - name: Compare OCR variants on that page
+      - name: Inspect what resolutions the leaflet API offers
         env:
           PYTHONUNBUFFERED: '1'
-        run: python probe_ocr_variants.py "${{ inputs.slug || 'codziennie' }}" "${{ inputs.page || '0' }}"
+        run: python probe_leaflet_images.py "${{ inputs.slug || 'codziennie' }}"
 
-      - name: Probe one flyer page with the current settings
-        env:
-          PYTHONUNBUFFERED: '1'
-        run: python probe_flyer_page.py "${{ inputs.slug || 'codziennie' }}" "${{ inputs.page || '0' }}"
