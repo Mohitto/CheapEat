@@ -15,6 +15,10 @@ Usuwamy trzy rodzaje śmieci:
    zostaje tylko najnowsza (scraper robił kiedyś insert zamiast replace).
 3. Mapowania-sieroty: wskazujące na produkty bez żadnej ceny (pozostałości
    po seedzie), przez które apka liczyła pokrycie sklepów z powietrza.
+4. Ceny gazetkowe absurdalnie niskie wobec ceny REGULARNEJ tego samego
+   składnika — mięso mielone po 0,50 zł/100 g przy regularnych 3,12 to nie
+   promocja, tylko zły odczyt OCR. Scraper stosuje dziś tę samą regułę
+   przy zapisie, ale wiersze zapisane wcześniej same z bazy nie znikną.
 
 Skrypt jest idempotentny — można go puścić wielokrotnie.
 """
@@ -23,7 +27,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from base_scraper import get_supabase
-from ingredient_catalog import match_ingredient
+from ingredient_catalog import match_ingredient, unit_price_of
 
 sb = get_supabase()
 
@@ -121,6 +125,53 @@ def cleanup_priceless_mappings() -> int:
     return removed
 
 
+MIN_PROMO_FRACTION_OF_REGULAR = 0.30
+
+
+def cleanup_implausible_promos() -> int:
+    """Ceny z gazetki poniżej 30% ceny regularnej tej samej kategorii."""
+    removed = 0
+    ingredients = {i["id"]: i["name"] for i in sb.table("ingredients").select("*").execute().data}
+
+    for ingredient_id, ingredient_name in ingredients.items():
+        mappings = sb.table("ingredient_mappings").select("store_product_id") \
+            .eq("ingredient_id", ingredient_id).execute().data
+        if not mappings:
+            continue
+
+        offers = []
+        for mapping in mappings:
+            sp = sb.table("store_products").select("id,name,unit,unit_amount") \
+                .eq("id", mapping["store_product_id"]).limit(1).execute().data
+            if not sp:
+                continue
+            product = sp[0]
+            unit, unit_amount = product.get("unit"), product.get("unit_amount")
+            if not unit or not unit_amount or unit_amount <= 0:
+                continue
+            for row in sb.table("prices").select("id,gross_price,source") \
+                    .eq("store_product_id", product["id"]).execute().data:
+                unit_price = unit_price_of(ingredient_name, row["gross_price"], unit, unit_amount)
+                if unit_price is not None:
+                    offers.append({**row, "unit_price": unit_price, "product": product["name"]})
+
+        regular = [o["unit_price"] for o in offers if o["source"] == "shop-regular"]
+        if not regular:
+            continue
+        floor = min(regular) * MIN_PROMO_FRACTION_OF_REGULAR
+
+        for offer in offers:
+            if offer["source"] == "shop-regular" or offer["unit_price"] >= floor:
+                continue
+            print(f"USUWAM CENĘ: {ingredient_name} '{offer['product']}' "
+                  f"{offer['gross_price']} zł = {round(offer['unit_price'], 3)} zł/j., "
+                  f"czyli {offer['unit_price'] / min(regular):.0%} ceny regularnej")
+            sb.table("prices").delete().eq("id", offer["id"]).execute()
+            removed += 1
+
+    return removed
+
+
 if __name__ == "__main__":
     print("=== 1. Produkty zmapowane do złego składnika ===")
     bad = cleanup_mismatched_products()
@@ -134,4 +185,12 @@ if __name__ == "__main__":
     orphans = cleanup_priceless_mappings()
     print(f"-> usunięto {orphans}\n")
 
-    print(f"RAZEM: {bad} złych produktów, {dupes} duplikatów cen, {orphans} mapowań bez ceny")
+    # Na końcu, bo ta kontrola porównuje się z cenami REGULARNYMI — a te
+    # muszą już być posprzątane z produktów zmapowanych do złej kategorii,
+    # inaczej porównywalibyśmy promocję z ceną zupełnie innego produktu.
+    print("=== 4. Ceny gazetkowe absurdalnie niskie wobec regularnych ===")
+    absurd = cleanup_implausible_promos()
+    print(f"-> usunięto {absurd}\n")
+
+    print(f"RAZEM: {bad} złych produktów, {dupes} duplikatów cen, "
+          f"{orphans} mapowań bez ceny, {absurd} nierealnych promocji")

@@ -42,6 +42,7 @@ from ingredient_catalog import (
     INGREDIENT_DEFAULTS,
     INGREDIENT_KEYWORDS,
     fuzzy_ingredient,
+    unit_price_of,
 )
 
 from .flyers import scrapable_flyers
@@ -55,6 +56,20 @@ DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
 # godzinami. Sufit jest wysoki i podnoszony zmienną środowiskową; gdy
 # zadziała, widać to w podsumowaniu, więc nie obcina po cichu.
 MAX_PRECISE_PAGES = int(os.environ.get("BIEDRONKA_MAX_PRECISE_PAGES", "150"))
+
+# Najniższa cena promocyjna, w jaką jeszcze wierzymy — jako UŁAMEK ceny
+# regularnej tego samego składnika ze sklepu.
+#
+# Sztywne widełki "zł za 100 g na kategorię" nie dają się ustawić dobrze.
+# Trzeba je było rozluźnić, żeby przepuścić prawdziwe masło po 0,995
+# zł/100 g z pierwszej strony gazetki — i tym samym wpuściły mięso
+# mielone po 0,50 zł/100 g oraz ser żółty po 0,68 zł/100 g, czyli
+# odczyty równie fałszywe co poprzednie. Cena regularna jest lepszym
+# punktem odniesienia, bo bierze się z tego samego sklepu i tej samej
+# kategorii, i sama nadąża za rynkiem. Nawet "-66% TANIEJ" zostawia
+# jedną trzecią ceny, więc oferta poniżej 30% jest niemal na pewno
+# błędem odczytu, a nie okazją.
+MIN_PROMO_FRACTION_OF_REGULAR = 0.30
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -249,6 +264,18 @@ class BiedronkaScraper:
                 INGREDIENT_DEFAULTS.get(ingredient_name, {}),
             )
 
+            # Ostatnia kontrola, i najmocniejsza: cena promocyjna
+            # porównana z ceną regularną tego samego składnika w tym samym
+            # sklepie. Zakresy per kategoria są zgadywane raz i starzeją
+            # się razem z rynkiem; ta liczba bierze się z danych.
+            regular = cheapest_regular_unit_price(self.sb, ingredient_id, ingredient_name)
+            if regular is not None and c["unit_price"] < regular * MIN_PROMO_FRACTION_OF_REGULAR:
+                print(f"[Biedronka] ODRZUCAM {ingredient_name}: {c['package_price']} zł za "
+                      f"{unit_amount:g}{unit} = {round(c['unit_price'], 3)} zł/j., "
+                      f"czyli {c['unit_price'] / regular:.0%} ceny regularnej "
+                      f"({round(regular, 3)} zł/j.) — to nie promocja, to zły odczyt")
+                continue
+
             product_name = _product_name(ingredient_name, c)
             store_product_id = get_or_create(
                 self.sb, "store_products",
@@ -279,6 +306,33 @@ class BiedronkaScraper:
             saved += 1
 
         return saved
+
+
+def cheapest_regular_unit_price(sb, ingredient_id: str, ingredient_name: str) -> float | None:
+    """Najniższa REGULARNA cena jednostkowa tego składnika w sklepie,
+    albo None, gdy jeszcze żadnej nie znamy."""
+    mappings = sb.table("ingredient_mappings").select("store_product_id") \
+        .eq("ingredient_id", ingredient_id).execute().data
+
+    best = None
+    for mapping in mappings:
+        product = sb.table("store_products").select("unit,unit_amount") \
+            .eq("id", mapping["store_product_id"]).limit(1).execute().data
+        if not product:
+            continue
+        unit, unit_amount = product[0].get("unit"), product[0].get("unit_amount")
+        if not unit or not unit_amount or unit_amount <= 0:
+            continue
+
+        prices = sb.table("prices").select("gross_price") \
+            .eq("store_product_id", mapping["store_product_id"]) \
+            .eq("source", "shop-regular").execute().data
+        for row in prices:
+            unit_price = unit_price_of(ingredient_name, row["gross_price"], unit, unit_amount)
+            if unit_price is not None and (best is None or unit_price < best):
+                best = unit_price
+
+    return best
 
 
 def _product_name(ingredient_name: str, c: dict) -> str:
