@@ -18,6 +18,37 @@ strona produktowa gazetki):
     psm 11,          1x -> 169 słów, 8 cen
     psm 11,          2x -> 202 słowa, 9 cen   <- wybrane
 Powiększenie 2x i tryb "rzadkiego tekstu" dają ~+50% słów i ~+80% cen.
+
+DWA SILNIKI, I TO NIE Z KAPRYSU
+-------------------------------
+Tesseract NIE odczytuje cen z gazetki Biedronki. Nie "słabo" — wcale.
+Zmierzone na stronie tytułowej (probe_ocr_variants.py, probe_page_tiles.py,
+probe_leaflet_images.py), gdzie wydrukowane są masło 1,99, papryka 5,99 i
+filet 14,99:
+
+    skala 0.6x / 1x / 2x .................. 0 cen
+    psm 6 / 11 / 12 ....................... 0 cen
+    alfabet ograniczony do cyfr ........... rozpada się segmentacja
+    separacja bieli od koloru ............. 0 cen
+    separacja czerni od koloru ............ 0 cen
+    autokontrast .......................... 1 cena (drobna plakietka zł/kg)
+    wycinek kafelka w 1-4x ................ 0 cen
+    12 nachodzących kafelków w 3x ......... 0 cen
+    silnik legacy (--oem 0) ............... 0 cen
+    EasyOCR, 2x ........................... 1,99 5,99 9,90 11,99 14,99 0,99
+
+Ten sam obrazek oddaje przy tym drobny druk co do znaku. Nie chodzi więc
+o rozdzielczość (API daje jeden rozmiar, 1146x1800) ani o układ strony,
+tylko o KRÓJ: cena to ciężka firmowa czcionka, grosze wyniesione jak
+indeks górny, bez przecinka, cyfry często się stykają. Model `pol` takich
+kształtów nie widział, sieć EasyOCR radzi sobie z nimi bez trudu.
+
+EasyOCR jest jednak ~15x wolniejszy, a gazetka ma prawie sto stron. Stąd
+podział ról: tesseract przegląda WSZYSTKIE strony i mówi tanio, czy jest
+na nich w ogóle nazwa któregoś z naszych składników; EasyOCR czyta tylko
+te strony, na których coś jest. Oba silniki są darmowe i otwartoźródłowe
+— projekt ma pozostać bezpłatny, więc płatne API wizyjne odpadają z
+definicji, nie z braku pomysłu.
 """
 import os
 import re
@@ -88,16 +119,31 @@ class Token:
         return f"Token({self.text!r} @({self.left},{self.top}) h={self.height})"
 
 
-def ocr_page(image_url: str, timeout: int = 120) -> tuple[list[Token], int]:
-    """Słowa strony gazetki z ramkami. Zwraca (tokeny, szerokość strony)."""
-    resp = requests.get(image_url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
+_last_download: tuple[str, str] | None = None
 
+
+def _download_page(image_url: str) -> Image.Image:
+    """Strona z dysku, jeśli to ta sama, którą przed chwilą pobraliśmy.
+
+    Każdą interesującą stronę czytamy dwoma silnikami po kolei, a strony
+    gazetki ważą po ~2,5 MB — bez tego cała gazetka szłaby przez sieć
+    dwa razy."""
+    global _last_download
     raw_path = "/tmp/leaflet_page_raw.png"
+    if _last_download and _last_download[0] == image_url:
+        return Image.open(_last_download[1])
+
+    resp = requests.get(image_url, headers=HEADERS, timeout=60)
+    resp.raise_for_status()
     with open(raw_path, "wb") as f:
         f.write(resp.content)
+    _last_download = (image_url, raw_path)
+    return Image.open(raw_path)
 
-    image = Image.open(raw_path)
+
+def ocr_page(image_url: str, timeout: int = 120) -> tuple[list[Token], int]:
+    """Słowa strony gazetki z ramkami. Zwraca (tokeny, szerokość strony)."""
+    image = _download_page(image_url)
     scaled = image.resize((image.width * OCR_UPSCALE, image.height * OCR_UPSCALE), Image.LANCZOS)
     ocr_path = "/tmp/leaflet_page_ocr.png"
     scaled.save(ocr_path)
@@ -123,6 +169,64 @@ def ocr_page(image_url: str, timeout: int = 120) -> tuple[list[Token], int]:
             continue
         tokens.append(Token(text, int(parts[6]), int(parts[7]),
                             int(parts[8]), int(parts[9]), conf))
+
+    return tokens, scaled.width
+
+
+EASYOCR_UPSCALE = 2
+EASYOCR_MIN_CONFIDENCE = 0.3
+_easyocr_reader = None
+
+
+def _reader():
+    """Model EasyOCR wczytywany raz na proces — jego budowa trwa dłużej
+    niż odczyt pojedynczej strony."""
+    global _easyocr_reader
+    if _easyocr_reader is None:
+        import easyocr
+        _easyocr_reader = easyocr.Reader(["pl"], gpu=False, verbose=False)
+    return _easyocr_reader
+
+
+def _split_fragment(text: str, left: int, top: int, width: int,
+                    height: int, conf: float) -> list[Token]:
+    """EasyOCR zwraca całe frazy ("PRZY ZAKUPIE 5"), a cała reszta tego
+    pliku pracuje na pojedynczych słowach z własną ramką. Dzielimy ramkę
+    frazy proporcjonalnie do długości słów — przybliżenie, ale w zupełności
+    wystarczające, bo używamy tych współrzędnych do liczenia ODLEGŁOŚCI
+    między słowem a ceną, a nie do przycinania obrazu."""
+    words = text.split()
+    if len(words) <= 1:
+        return [Token(text.strip(), left, top, width, height, conf)]
+
+    units = sum(len(w) for w in words) + (len(words) - 1)
+    tokens, x = [], float(left)
+    for word in words:
+        span = width * len(word) / units
+        tokens.append(Token(word, int(x), top, max(1, int(span)), height, conf))
+        x += width * (len(word) + 1) / units
+    return tokens
+
+
+def ocr_page_precise(image_url: str) -> tuple[list[Token], int]:
+    """Odczyt strony silnikiem, który radzi sobie z cenami (EasyOCR).
+
+    Zwraca to samo co ocr_page — (tokeny, szerokość strony) — więc reszta
+    pipeline'u nie wie, którym silnikiem czytano."""
+    image = _download_page(image_url).convert("RGB")
+    scaled = image.resize((image.width * EASYOCR_UPSCALE, image.height * EASYOCR_UPSCALE),
+                          Image.LANCZOS)
+    path = "/tmp/leaflet_page_easyocr.png"
+    scaled.save(path)
+
+    tokens: list[Token] = []
+    for box, text, conf in _reader().readtext(path, detail=1, paragraph=False):
+        if conf < EASYOCR_MIN_CONFIDENCE or not text.strip():
+            continue
+        xs = [int(point[0]) for point in box]
+        ys = [int(point[1]) for point in box]
+        tokens.extend(_split_fragment(
+            text, min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys), conf * 100))
 
     return tokens, scaled.width
 
@@ -168,8 +272,11 @@ def find_prices(tokens: list[Token], page_width: int) -> list[tuple[Token, float
 # mieści się w każdym rozsądnym zakresie), więc żadna kontrola dalej ich
 # nie łapała — jedyne miejsce, gdzie widać różnicę, to sąsiedztwo słów
 # "od"/"do"/"oferta".
-DATE_LIKE = re.compile(r'^(\d{1,2})\.(\d{2})$')
-DATE_NEIGHBOURS = {"od", "do", "oferta", "-"}
+# Separator bywa i kropką, i przecinkiem — EasyOCR czyta "OD 10.09" jako
+# "OD 10,09". Za to sąsiadem musi być "do" albo "oferta": samo "od"
+# odrzucałoby prawdziwe ceny z gazetkowego "już od 9,99".
+DATE_LIKE = re.compile(r'^(\d{1,2})[.,](\d{2})$')
+DATE_NEIGHBOURS = {"do", "oferta", "-"}
 
 
 def _is_date(token: Token, tokens: list[Token], page_width: int) -> bool:
@@ -190,6 +297,28 @@ def _is_date(token: Token, tokens: list[Token], page_width: int) -> bool:
         if (fold(other.text.strip(".,"), ocr_digits=False) in DATE_NEIGHBOURS
                 or DATE_LIKE.match(other.text)):
             return True
+    return False
+
+
+# "66% TANIEJ" — po liczbie stoi słowo "taniej", więc to rabat, nie kwota.
+# Wzorzec dopuszcza "tanlej", bo fold() zamienia wielkie "I" na "l"
+# (w bezszeryfowym foncie to ta sama kreska) — bez tego strażnik nie
+# łapał niczego, co przyszło z gazetki zapisane wersalikami.
+TANIEJ = re.compile(r'^tan[il]e[jl]', re.IGNORECASE)
+
+
+def _followed_by_taniej(token: Token, tokens: list[Token], page_width: int) -> bool:
+    max_gap = page_width * 0.06
+    for other in tokens:
+        if other is token or not TANIEJ.match(fold(other.text, ocr_digits=False)):
+            continue
+        if other.left < token.left:
+            continue
+        if other.left - (token.left + token.width) > max_gap:
+            continue
+        if abs(other.cy - token.cy) > token.height:
+            continue
+        return True
     return False
 
 
@@ -226,6 +355,12 @@ def _find_glued_prices(tokens: list[Token], used: set[int],
         if 1900 <= value <= 2100:
             continue
 
+        # Wielkość rabatu jest na gazetce równie duża jak cena, a znak
+        # procenta bywa odczytany jako dziewiątka ("66% TANIEJ" -> "669
+        # TANIEJ"). Bez tego z każdej plakietki rabatu robiła się cena.
+        if _followed_by_taniej(t, tokens, page_width):
+            continue
+
         if any(
             UNIT_AFTER_NUMBER.match(other.text)
             and other.left >= t.left
@@ -253,6 +388,12 @@ UNIT_PRICE_INLINE = re.compile(r'\d\s*(z[łl])?\s*/\s*(kg|l|szt|100)\b', re.IGNO
 # Gramatura jako jeden token ("500g") albo dwa ("500" + "g").
 SPEC_ONE_TOKEN = re.compile(r'^(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l|szt)\.?$', re.IGNORECASE)
 SPEC_NUMBER = re.compile(r'^\d+(?:[.,]\d+)?$')
+# "200 g" wychodzi z OCR jako "2009" — litera "g" w tym kroju jest niemal
+# nieodróżnialna od dziewiątki, a bez gramatury cała oferta wypada
+# ("brak gramatury w pobliżu"). Ograniczenia trzymają to blisko ziemi:
+# gramatury opakowań są wielokrotnościami dziesięciu, więc cena odczytana
+# jako "1499" czy "199" tu nie wpadnie.
+SPEC_GRAMS_AS_NINE = re.compile(r'^(\d{2,4})9$')
 SPEC_UNIT = re.compile(r'^(kg|g|ml|l|szt)\.?$', re.IGNORECASE)
 
 MAX_NAME_DISTANCE_RATIO = 0.22   # ułamek szerokości strony
@@ -286,6 +427,11 @@ def _find_specs(tokens: list[Token], page_width: int) -> list[tuple[Token, str, 
         if m:
             unit, amount = _normalise_spec(float(m.group(1).replace(",", ".")), m.group(2))
             specs.append((t, unit, amount))
+            continue
+
+        m = SPEC_GRAMS_AS_NINE.match(t.text)
+        if m and int(m.group(1)) % 10 == 0 and 20 <= int(m.group(1)) <= 5000:
+            specs.append((t, "g", float(m.group(1))))
             continue
 
         if not SPEC_NUMBER.match(t.text):
@@ -370,7 +516,9 @@ OFFER_PERIOD = re.compile(
     r'\bod\s+(\d{1,2})[.,](\d{1,2})\s+do\s+(\d{1,2})[.,](\d{1,2})\b')
 # Promocje "z kartą lub apką" wymagają karty Moja Biedronka — cena bez
 # niej jest inna, więc apka musi to napisać wprost.
-LOYALTY = re.compile(r'\bz\s+kart|moja\s+biedronka|\bz\s+apk')
+# Odstęp jest opcjonalny: znaczek "Z KARTĄ LUB APKĄ" jest ciasno złożony
+# i wraca z OCR jako jedno słowo "ZKARTĄ".
+LOYALTY = re.compile(r'\bz\s*kart|moja\s*biedronka|\bz\s*apk')
 
 # Dwa promienie, bo dwa różne ryzyka. Warunek promocji ("przy zakupie
 # 5") ZMIENIA CENĘ, więc wolno go czytać tylko z bezpośredniego

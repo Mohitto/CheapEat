@@ -4,3 +4,7 @@ supabase==2.31.0
 python-dotenv==1.0.1
 lxml==5.1.0
 Pillow==11.3.0
+# Ceny z gazetki czyta EasyOCR — tesseract nie rozpoznaje firmowego
+# kroju cenowego Biedronki (pomiary w docstringu biedronka/leaflet_ocr.py).
+# Otwartoźródłowy, działa na CPU, bez żadnego API.
+easyocr==1.7.2

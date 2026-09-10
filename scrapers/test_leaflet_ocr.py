@@ -15,7 +15,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from biedronka.leaflet_ocr import Token, extract_candidates
+from biedronka.leaflet_ocr import Token, _split_fragment, extract_candidates
 
 PAGE_WIDTH = 2000
 
@@ -64,6 +64,39 @@ LOOSE_CHICKEN_TILE = tile([
 ])
 
 
+# --- to samo, ale tak jak czyta to EasyOCR ---------------------------------
+#
+# EasyOCR zwraca całe frazy, nie pojedyncze słowa, i ma własny zestaw
+# pomyłek. Poniższe fragmenty są PRZEPISANE Z JEGO PRAWDZIWEGO WYJŚCIA dla
+# strony tytułowej (probe_ocr_engines.py, gazetka nr 37/2026) — razem z
+# błędami, które trzeba wytrzymać:
+#   "200 g"    -> "2009"   (litera g nie do odróżnienia od dziewiątki)
+#   "66%"      -> "669"    (znak procenta jako dziewiątka)
+#   "OD 10.09" -> "OD 10,09" (przecinek zamiast kropki w dacie)
+#   "Z 5 SZTUK"-> "Z5 SZTUK"
+EASYOCR_BUTTER_FRAGMENTS = [
+    ("ZKARTĄ LUB APKĄ", 1290, 770, 200, 40),
+    ("PRZY ZAKUPIE 5", 1285, 820, 210, 46),
+    ("669 TANIEJ", 1285, 875, 200, 60),
+    ("KAŻDA Z5 SZTUK", 1290, 940, 190, 34),
+    ("199", 1330, 980, 150, 120),
+    ("OFERTA", 1560, 1120, 110, 26),
+    ("OD 10,09 DO 12.09", 1690, 1120, 230, 26),
+    ("Masło Ekstra z Polskiej Mleczarni; 2009", 1280, 1160, 560, 36),
+    ("Limit dzienny 5 szt. na kartę Moja Biedronka:", 1280, 1205, 520, 28),
+    ("MASŁO", 1800, 460, 180, 60),
+    ("ekstra", 1820, 530, 120, 34),
+]
+
+EASYOCR_BUTTER_TILE = [
+    token
+    for text, left, top, width, height in EASYOCR_BUTTER_FRAGMENTS
+    for token in _split_fragment(text, left, top, width, height, 85.0)
+]
+
+EASYOCR_PAGE_WIDTH = 2292
+
+
 def check(name: str, condition: bool, detail: str = "") -> bool:
     print(("  OK   " if condition else "  BŁĄD ") + name + (f" — {detail}" if detail else ""))
     return condition
@@ -108,6 +141,24 @@ def main() -> int:
                     str(c["package_price"]))
         ok &= check("cena za 100 g zgadza się z gazetką",
                     round(c["unit_price"], 3) == 1.499, str(round(c["unit_price"], 4)))
+
+    print("\nKafelek masła tak, jak czyta go EasyOCR (z jego pomyłkami)")
+    got = extract_candidates(EASYOCR_BUTTER_TILE, EASYOCR_PAGE_WIDTH)
+    ok &= check("znaleziono dokładnie jedną ofertę", len(got) == 1,
+                f"{len(got)}: {[(c['ingredient_name'], c['package_price']) for c in got]}")
+    if got:
+        c = got[0]
+        ok &= check("kategoria to masło", c["ingredient_name"] == "masło", c["ingredient_name"])
+        ok &= check("cena sklejona '199' odczytana jako 1,99",
+                    c["single_price"] == 1.99, str(c["single_price"]))
+        ok &= check("gramatura '2009' odczytana jako 200 g",
+                    c["unit_amount"] == 1000, str(c["unit_amount"]))
+        ok &= check("płacisz za pięć kostek", c["package_price"] == 9.95, str(c["package_price"]))
+        ok &= check("rabat '669 TANIEJ' nie stał się ceną 6,69",
+                    c["package_price"] != 6.69)
+        ok &= check("data z przecinkiem odczytana", c["valid_from"] == (10, 9),
+                    str(c["valid_from"]))
+        ok &= check("wymaga karty", c["loyalty"] is True)
 
     print("\nWYNIK:", "wszystko zgodne z gazetką" if ok else "są rozbieżności")
     return 0 if ok else 1

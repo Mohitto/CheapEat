@@ -13,11 +13,13 @@ aplikacji:
      wygasłe znikają same.
   2. Strona press,id,... zawiera window.galleryLeaflet.init("{UUID}"),
      a leaflet-api pod tym UUID-em zwraca adresy obrazków stron.
-  3. biedronka/leaflet_ocr.py — tesseract (darmowy, open-source: projekt
-     ma pozostać bezpłatny, więc świadomie bez płatnych API wizyjnych) w
-     trybie TSV, czyli ze współrzędnymi każdego słowa. Cenę wiążemy z
-     nazwą produktu i gramaturą po ODLEGŁOŚCI NA STRONIE, bo gazetka to
-     siatka kafelków i kolejność czytania tekstu nie odpowiada układowi.
+  3. biedronka/leaflet_ocr.py — OCR ze współrzędnymi każdego słowa. Cenę
+     wiążemy z nazwą produktu i gramaturą po ODLEGŁOŚCI NA STRONIE, bo
+     gazetka to siatka kafelków i kolejność czytania tekstu nie odpowiada
+     układowi. Silniki są dwa i oba darmowe (projekt ma pozostać
+     bezpłatny, więc świadomie bez płatnych API wizyjnych): tesseract
+     przegląda wszystkie strony, EasyOCR czyta te, na których coś jest —
+     powód tego podziału opisuje docstring leaflet_ocr.py.
 
 Klasyfikacja do kategorii składnika jest markowo-agnostyczna i wspólna z
 pozostałymi sklepami — patrz scrapers/ingredient_catalog.py.
@@ -36,12 +38,23 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_scraper import get_or_create, get_supabase, replace_price
-from ingredient_catalog import INGREDIENT_DEFAULTS, INGREDIENT_KEYWORDS
+from ingredient_catalog import (
+    INGREDIENT_DEFAULTS,
+    INGREDIENT_KEYWORDS,
+    fuzzy_ingredient,
+)
 
 from .flyers import scrapable_flyers
-from .leaflet_ocr import extract_candidates, ocr_page
+from .leaflet_ocr import extract_candidates, ocr_page, ocr_page_precise
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
+
+# Ile stron wolno przeczytać dokładnym (wolnym) silnikiem w jednym
+# przebiegu. Przegląd tesseractem kosztuje ~1 s na stronę, dokładny odczyt
+# ~25 s — bez sufitu jeden przebieg po pięciu gazetkach potrafiłby chodzić
+# godzinami. Sufit jest wysoki i podnoszony zmienną środowiskową; gdy
+# zadziała, widać to w podsumowaniu, więc nie obcina po cichu.
+MAX_PRECISE_PAGES = int(os.environ.get("BIEDRONKA_MAX_PRECISE_PAGES", "150"))
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -116,14 +129,18 @@ class BiedronkaScraper:
         flyers = scrapable_flyers()
         if not flyers:
             print("[Biedronka] Brak gazetek do przeczytania")
-            return {"flyers": 0, "pages_scanned": 0, "ingredients_found": 0, "saved": 0}
+            return {"flyers": 0, "pages_scanned": 0, "pages_read_precisely": 0,
+                    "ingredients_found": 0, "saved": 0}
 
         print(f"[Biedronka] Gazetki do przeczytania: {len(flyers)}")
         for f in flyers:
             kiedy = "zapowiedziana" if f["is_upcoming"] else "obowiązuje"
             print(f"[Biedronka]   {f['slug']}: {f['valid_from']} .. {f['valid_to']} ({kiedy})")
 
-        found_per_ingredient: dict[str, dict] = {}
+        # Faza 1 — przegląd. Tesseract po każdej stronie każdej gazetki:
+        # tanio i tylko po to, żeby wiedzieć, gdzie w ogóle stoi nazwa
+        # któregoś z naszych składników.
+        promising: list[dict] = []
         pages_scanned = 0
 
         for flyer in flyers:
@@ -138,42 +155,69 @@ class BiedronkaScraper:
 
             for i, image_url in enumerate(image_urls):
                 try:
-                    tokens, page_width = ocr_page(image_url)
+                    scout_tokens, _ = ocr_page(image_url)
                 except Exception as e:
                     print(f"[Biedronka] {flyer['slug']} strona {i}: błąd OCR ({e}), pomijam")
                     continue
 
                 pages_scanned += 1
+                names = {ing for t in scout_tokens if (ing := fuzzy_ingredient(t.text))}
+                if names:
+                    promising.append({"flyer": flyer, "index": i,
+                                      "url": image_url, "names": names})
 
-                # Gazetki tematyczne są krótkie, a to w nich siedzą promocje
-                # na nasze składniki (nabiał, mięso). Gdy z takiej strony nic
-                # nie wyciągniemy, chcemy zobaczyć, co OCR w ogóle odczytał —
-                # bez tego nie da się stwierdzić, czy zawiodło rozpoznanie
-                # tekstu, czy dopasowanie ceny do nazwy.
-                if DEBUG and len(image_urls) <= 4:
-                    interesting = [t for t in tokens if len(t.text) > 2 or t.text.isdigit()]
-                    print(f"[Biedronka] {flyer['slug']} s.{i}: OCR odczytał "
-                          f"{len(tokens)} słów; treść: "
-                          f"{' | '.join(t.text for t in interesting[:120])}")
+        # Kolejność ma znaczenie, bo faza 2 ma budżet: strona z trzema
+        # naszymi składnikami jest warta więcej niż strona z jednym, a
+        # gdyby zabrakło czasu, chcemy stracić te najmniej obiecujące.
+        promising.sort(key=lambda page: len(page["names"]), reverse=True)
+        print(f"[Biedronka] Stron ze składnikami: {len(promising)} z {pages_scanned}; "
+              f"czytam dokładnie do {MAX_PRECISE_PAGES}")
 
-                for c in extract_candidates(tokens, page_width, debug=DEBUG):
-                    # Klucz obejmuje WARIANT oferty, nie samą kategorię.
-                    # Promocja warunkowa ("5 kostek masła po 1,99") ma
-                    # niższą cenę jednostkową niż pojedyncza kostka, więc
-                    # przy kluczowaniu samą nazwą wypychała ją z bazy — a
-                    # do przepisu na 30 g masła nikt nie kupi pięciu
-                    # kostek. Oba warianty trafiają do bazy obok siebie i
-                    # to apka wybiera tańszy dla konkretnej ilości.
-                    key = (c["ingredient_name"], c["bundle_units"], c["sold_loose"])
-                    previous = found_per_ingredient.get(key)
-                    if previous is None or c["unit_price"] < previous["unit_price"]:
-                        found_per_ingredient[key] = {**c, "flyer": flyer}
-                        print(f"[Biedronka] {flyer['slug']} s.{i}: {c['ingredient_name']} -> "
-                              f"{c['package_price']} zł za {c['unit_amount']:g}{c['unit']} "
-                              f"({round(c['unit_price'], 4)} zł/j.)"
-                              + (f" [przy zakupie {c['bundle_units']} szt.]"
-                                 if c["bundle_units"] > 1 else "")
-                              + (" [na wagę]" if c["sold_loose"] else ""))
+        found_per_ingredient: dict[tuple, dict] = {}
+        pages_read = 0
+
+        # Faza 2 — odczyt. Tylko obiecujące strony i tylko silnikiem, który
+        # widzi ceny (patrz leaflet_ocr.py: tesseract ich nie czyta).
+        for page in promising[:MAX_PRECISE_PAGES]:
+            flyer, i = page["flyer"], page["index"]
+            try:
+                tokens, page_width = ocr_page_precise(page["url"])
+            except Exception as e:
+                print(f"[Biedronka] {flyer['slug']} strona {i}: "
+                      f"dokładny OCR nie zadziałał ({e}), pomijam")
+                continue
+            pages_read += 1
+
+            candidates = extract_candidates(tokens, page_width, debug=DEBUG)
+
+            # Strona ma nazwę naszego składnika, a mimo to nic z niej nie
+            # wyszło — to jedyny przypadek, w którym warto zobaczyć surowy
+            # odczyt. Bez tego nie da się odróżnić "OCR nie przeczytał"
+            # od "przeczytał, ale nie umieliśmy powiązać ceny z nazwą".
+            if DEBUG and not candidates:
+                readable = [t for t in tokens if len(t.text) > 2 or t.text.isdigit()]
+                print(f"[Biedronka] {flyer['slug']} s.{i}: {sorted(page['names'])} "
+                      f"na stronie, ale bez ceny; OCR odczytał {len(tokens)} słów: "
+                      f"{' | '.join(t.text for t in readable[:120])}")
+
+            for c in candidates:
+                # Klucz obejmuje WARIANT oferty, nie samą kategorię.
+                # Promocja warunkowa ("5 kostek masła po 1,99") ma
+                # niższą cenę jednostkową niż pojedyncza kostka, więc
+                # przy kluczowaniu samą nazwą wypychała ją z bazy — a
+                # do przepisu na 30 g masła nikt nie kupi pięciu
+                # kostek. Oba warianty trafiają do bazy obok siebie i
+                # to apka wybiera tańszy dla konkretnej ilości.
+                key = (c["ingredient_name"], c["bundle_units"], c["sold_loose"])
+                previous = found_per_ingredient.get(key)
+                if previous is None or c["unit_price"] < previous["unit_price"]:
+                    found_per_ingredient[key] = {**c, "flyer": flyer}
+                    print(f"[Biedronka] {flyer['slug']} s.{i}: {c['ingredient_name']} -> "
+                          f"{c['package_price']} zł za {c['unit_amount']:g}{c['unit']} "
+                          f"({round(c['unit_price'], 4)} zł/j.)"
+                          + (f" [przy zakupie {c['bundle_units']} szt.]"
+                             if c["bundle_units"] > 1 else "")
+                          + (" [na wagę]" if c["sold_loose"] else ""))
 
         if DEBUG:
             priced = {key[0] for key in found_per_ingredient}
@@ -184,6 +228,7 @@ class BiedronkaScraper:
         return {
             "flyers": len(flyers),
             "pages_scanned": pages_scanned,
+            "pages_read_precisely": pages_read,
             "ingredients_found": len(found_per_ingredient),
             "saved": saved,
         }
