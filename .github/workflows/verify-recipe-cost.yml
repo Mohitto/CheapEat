@@ -23,8 +23,55 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Tesseract OCR (pol)
+        run: |
+          # Obrazy runnerów mają doklejone repozytoria firm trzecich (Chrome),
+          # które potrafią serwować nieaktualny indeks i wywalić apt-get update
+          # na niezgodności sumy kontrolnej — co nie ma nic wspólnego z
+          # pakietami, których potrzebujemy. Nie zależymy od nich, więc precz
+          # (nazwa pliku bywa różna: .list albo .sources, stąd szukanie treści).
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          # Nieudane odświeżenie indeksów nie może blokować instalacji —
+          # tesseract jest w głównym archiwum Ubuntu. Jeśli mimo to nie da się
+          # go zainstalować, padnie następna komenda i zobaczymy to wprost.
+          sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Test flyer tile reading (no network)
+        run: python test_leaflet_ocr.py
+
+      - name: Purge bad/stale price rows
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python cleanup_bad_mappings.py
+
+      - name: Re-seed test recipes (egg units in pieces)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python seed_dev_data.py
+
+      - name: Re-run all scrapers with unit-aware packages
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python run_all.py
+
       - name: Compute recipe cost from real Supabase data
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
         run: python verify_recipe_cost.py
+
+      - name: Dump full price/mapping state per ingredient
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python diagnose_prices.py

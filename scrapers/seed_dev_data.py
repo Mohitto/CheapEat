@@ -20,7 +20,7 @@ Uruchomienie:
     pip install -r requirements.txt
     python seed_dev_data.py
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from base_scraper import get_supabase
 
@@ -55,23 +55,6 @@ INGREDIENTS = [
     ("sól", 0.0, 0),
 ]
 
-# nazwa składnika -> { sklep: (gramatura opakowania, cena PLN) }
-# Ceny orientacyjne (sierpień 2026) — do zastąpienia realnymi z gazetek.
-STORE_PRICES = {
-    "mąka pszenna":   {"Biedronka": (1000, 3.49), "Lidl": (1000, 3.29)},
-    "jajka":          {"Biedronka": (600, 9.99), "Lidl": (600, 9.49)},
-    "mleko":          {"Biedronka": (1000, 3.99), "Lidl": (1000, 3.79)},
-    "cukier":         {"Biedronka": (1000, 4.29), "Lidl": (1000, 4.19)},
-    "masło":          {"Biedronka": (200, 7.99), "Lidl": (200, 7.49)},
-    "ryż":            {"Biedronka": (1000, 6.99), "Lidl": (1000, 6.49)},
-    "kurczak pierś":  {"Biedronka": (1000, 19.99), "Lidl": (1000, 18.99)},
-    "cebula":         {"Biedronka": (1000, 2.99), "Lidl": (1000, 2.49)},
-    "pomidor":        {"Biedronka": (1000, 6.99), "Lidl": (1000, 6.49)},
-    "ser żółty":      {"Biedronka": (300, 10.99), "Lidl": (300, 9.99)},
-    "olej rzepakowy": {"Biedronka": (1000, 6.49), "Lidl": (1000, 5.99)},
-    "sól":            {"Biedronka": (1000, 1.99), "Lidl": (1000, 1.79)},
-}
-
 RECIPES = [
     {
         "title": "[TEST] Kurczak z ryżem i warzywami",
@@ -93,7 +76,9 @@ RECIPES = [
         "ingredients": [
             ("mąka pszenna", 250, "g"),
             ("mleko", 500, "ml"),
-            ("jajka", 120, "g"),
+            # Jajka liczymy w sztukach — nikt nie kupuje ani nie odmierza
+            # ich na gramy (patrz INGREDIENT_UNIT w ingredient_catalog.py).
+            ("jajka", 2, "szt"),
             ("masło", 30, "g"),
             ("sól", 3, "g"),
         ],
@@ -103,7 +88,7 @@ RECIPES = [
         "portions": 2,
         "prep_minutes": 10,
         "ingredients": [
-            ("jajka", 180, "g"),
+            ("jajka", 3, "szt"),
             ("mleko", 50, "ml"),
             ("ser żółty", 60, "g"),
             ("masło", 15, "g"),
@@ -129,43 +114,11 @@ def main():
         )
     print(f"  {len(ingredient_ids)} składników")
 
-    print("== Produkty sklepowe + ceny gazetkowe + mapowania ==")
-    valid_from = datetime.now().strftime("%Y-%m-%d")
-    valid_to = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-
-    price_count = 0
-    mapping_count = 0
-    for ing_name, per_store in STORE_PRICES.items():
-        for store_name, (unit_amount, price) in per_store.items():
-            store_id = store_ids[store_name]
-            product_name = f"{ing_name.capitalize()} {store_name}"
-            product_id = get_or_create(
-                "store_products",
-                {"store_id": store_id, "name": product_name},
-                {"unit": "g", "unit_amount": unit_amount},
-            )
-
-            sb.table("prices").insert({
-                "store_product_id": product_id,
-                "gross_price": price,
-                "source": "flyer",
-                "valid_from": valid_from,
-                "valid_to": valid_to,
-            }).execute()
-            price_count += 1
-
-            existing_mapping = sb.table("ingredient_mappings").select("id") \
-                .eq("ingredient_id", ingredient_ids[ing_name]) \
-                .eq("store_product_id", product_id).limit(1).execute()
-            if not existing_mapping.data:
-                sb.table("ingredient_mappings").insert({
-                    "ingredient_id": ingredient_ids[ing_name],
-                    "store_product_id": product_id,
-                    "conversion_factor": round(unit_amount / 100, 3),
-                    "priority": 10,
-                }).execute()
-                mapping_count += 1
-    print(f"  {price_count} cen wstawionych, {mapping_count} nowych mapowań")
+    # Produktów sklepowych, mapowań i cen NIE seedujemy. Wcześniej ten
+    # skrypt wstawiał zmyślone ceny (source='flyer') razem ze zmyślonymi
+    # opakowaniami; potrafiły wygrać z prawdziwymi cenami ze scraperów
+    # (apka wybiera najtańszą opcję) i pokazywały w przepisie kwoty, które
+    # nie istnieją w żadnym sklepie. Ceny mają jedno źródło: scrapery.
 
     print("== Przepisy testowe ==")
     for recipe in RECIPES:

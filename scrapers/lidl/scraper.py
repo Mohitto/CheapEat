@@ -35,13 +35,15 @@ from datetime import datetime, timedelta
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from base_scraper import get_supabase
+from base_scraper import get_or_create, get_supabase, replace_price
 from ingredient_catalog import (
-    AVERAGE_UNIT_WEIGHT_G,
     INGREDIENT_DEFAULTS,
     INGREDIENT_KEYWORDS,
     is_plausible,
     match_ingredient,
+    parse_package_spec,
+    unit_for,
+    unit_price_of,
 )
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
@@ -85,17 +87,6 @@ MAX_NESTED_SITEMAPS = 5
 PRODUCT_SITEMAP_NAME_HINT = "product_sitemap"
 MAX_PRODUCT_MATCHES_PER_INGREDIENT = 3
 _POLISH_FOLD = str.maketrans({"ł": "l", "Ł": "L"})
-
-
-def get_or_create(sb, table: str, match: dict, defaults: dict | None = None) -> str:
-    query = sb.table(table).select("id")
-    for key, value in match.items():
-        query = query.eq(key, value)
-    res = query.limit(1).execute()
-    if res.data:
-        return res.data[0]["id"]
-    ins = sb.table(table).insert({**match, **(defaults or {})}).execute()
-    return ins.data[0]["id"]
 
 
 def _extract_balanced_json(text: str, start_brace_idx: int) -> str | None:
@@ -363,46 +354,6 @@ def extract_products_from_category(url: str) -> tuple[list[dict], str]:
     return products, resp.text
 
 
-# Gramatura/objętość opakowania NIE jest ujawniana w polach JSON, które
-# widzieliśmy w SSR (patrz probe_endpoints.py) — ale polskie nazwy
-# produktów spożywczych zwyczajowo zawierają ją wprost w tytule
-# (np. "Cukier biały 1 kg", "Mleko 3,2% 1l", "Jajka 10 szt"). Bez tego nie
-# da się BEZPIECZNIE przeliczyć ceny opakowania na cenę za 100g/ml —
-# zgadywanie stałej gramatury odtworzyłoby dokładnie ten sam błąd
-# (absurdalne ceny), który naprawiliśmy wcześniej w tej sesji. Więc:
-# znajdź gramaturę/ilość w tytule albo pomiń produkt, nigdy nie zgaduj.
-GRAMMAGE_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b', re.IGNORECASE)
-COUNT_PATTERN = re.compile(r'(\d{1,2})\s*szt\b', re.IGNORECASE)
-
-
-def extract_unit_amount_grams(title: str, ingredient_name: str) -> float | None:
-    """Zwraca gramaturę/objętość opakowania w gramach/ml (lub przeliczoną
-    z liczby sztuk dla kategorii typu jajka), albo None jeśli tytuł nie
-    zawiera żadnej wiarygodnej specyfikacji.
-
-    Dla produktów sprzedawanych na sztuki (np. jajka) próbujemy najpierw
-    COUNT_PATTERN — gdy szukamy w całym widocznym tekście strony produktu
-    (nie tylko w tytule), GRAMMAGE_PATTERN mogłoby złapać pierwszą liczbę
-    z gramami z tabeli wartości odżywczych (np. "białko 12 g") zamiast
-    prawdziwej wagi opakowania; "X szt" nie występuje w takich tabelach,
-    więc jest bezpieczniejszym pierwszym wyborem tam, gdzie ma sens."""
-    avg_weight = AVERAGE_UNIT_WEIGHT_G.get(ingredient_name)
-    if avg_weight is not None:
-        m = COUNT_PATTERN.search(title)
-        if m:
-            return float(m.group(1)) * avg_weight
-
-    m = GRAMMAGE_PATTERN.search(title)
-    if m:
-        amount = float(m.group(1).replace(",", "."))
-        unit = m.group(2).lower()
-        if unit == "kg" or unit == "l":
-            amount *= 1000
-        return amount
-
-    return None
-
-
 class LidlScraper:
     store_name = "Lidl"
     store_website = "https://www.lidl.pl"
@@ -452,14 +403,43 @@ class LidlScraper:
             for p in all_products:
                 print(f"[Lidl]   tytuł: {p['title']!r} ({p['price']} zł)")
 
+        # Porównanie "najtańszej" opcji MUSI odbywać się na cenie za 100g/ml,
+        # nie na surowej cenie opakowania — inaczej mały słoiczek za 2 zł
+        # wygrywa z dużym opakowaniem za 4 zł, mimo że w przeliczeniu na
+        # 100g jest droższy. To dokładnie ten sam błąd (nieprzeliczona
+        # cena), który naprawiliśmy wcześniej w tej sesji dla wzoru
+        # kosztu — tu wypłynął na żywo przy testowaniu Biedronka-sklep
+        # (patrz shop_scraper.py), więc naprawiony identycznie tutaj.
         found_per_ingredient: dict[str, dict] = {}
         for p in all_products:
             ingredient_name = match_ingredient(p["title"])
             if not ingredient_name:
                 continue
-            print(f"[Lidl] Dopasowano '{p['title']}' -> {ingredient_name} ({p['price']} zł)")
-            if ingredient_name not in found_per_ingredient or p["price"] < found_per_ingredient[ingredient_name]["price"]:
-                found_per_ingredient[ingredient_name] = p
+
+            # JSON-LD "name" produktu zwykle NIE zawiera gramatury (np.
+            # "Jaja od kur... klasa A" bez "10 szt") — spec_text (gdy
+            # dostępny) doklewa description/additionalProperty, gdzie
+            # naprawdę bywa podana ilość/waga.
+            spec_text = p.get("spec_text", p["title"])
+            spec = parse_package_spec(spec_text, ingredient_name)
+            if spec is None:
+                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono wielkości opakowania "
+                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny jednostkowej")
+                continue
+
+            unit, unit_amount = spec
+            unit_price = unit_price_of(ingredient_name, p["price"], unit, unit_amount)
+            if unit_price is None:
+                print(f"[Lidl] Pomijam '{p['title']}' — opakowanie w '{unit}', "
+                      f"a {ingredient_name} liczymy w '{unit_for(ingredient_name)}'")
+                continue
+
+            print(f"[Lidl] Dopasowano '{p['title']}' -> {ingredient_name} "
+                  f"({p['price']} zł za {unit_amount:g}{unit}, {round(unit_price, 4)} zł/j.)")
+
+            candidate = {**p, "unit": unit, "unit_amount": unit_amount, "unit_price": unit_price}
+            if ingredient_name not in found_per_ingredient or unit_price < found_per_ingredient[ingredient_name]["unit_price"]:
+                found_per_ingredient[ingredient_name] = candidate
 
         saved = self._save(found_per_ingredient)
         return {"products_seen": len(all_products), "ingredients_found": len(found_per_ingredient), "saved": saved}
@@ -473,21 +453,11 @@ class LidlScraper:
         saved = 0
 
         for ingredient_name, p in found_per_ingredient.items():
-            # JSON-LD "name" produktu zwykle NIE zawiera gramatury (np.
-            # "Jaja od kur... klasa A" bez "10 szt") — spec_text (gdy
-            # dostępny) doklewa description/additionalProperty, gdzie
-            # naprawdę bywa podana ilość/waga.
-            spec_text = p.get("spec_text", p["title"])
-            unit_amount = extract_unit_amount_grams(spec_text, ingredient_name)
-            if unit_amount is None:
-                print(f"[Lidl] Pomijam '{p['title']}' — nie znaleziono gramatury/ilości "
-                      f"(szukano w: {spec_text!r}), nie da się bezpiecznie policzyć ceny za 100g/ml")
-                continue
-
-            price_per_100 = round(p["price"] / (unit_amount / 100.0), 4)
-            if not is_plausible(ingredient_name, price_per_100):
+            unit, unit_amount, unit_price = p["unit"], p["unit_amount"], p["unit_price"]
+            if not is_plausible(ingredient_name, unit_price):
                 print(f"[Lidl] Odrzucam nieprawdopodobną cenę: {ingredient_name} -> "
-                      f"{price_per_100} zł/100 (z '{p['title']}', {p['price']} zł za {unit_amount:g}g)")
+                      f"{round(unit_price, 4)} zł/j. (z '{p['title']}', {p['price']} zł "
+                      f"za {unit_amount:g}{unit})")
                 continue
 
             ingredient_id = get_or_create(
@@ -499,16 +469,14 @@ class LidlScraper:
             store_product_id = get_or_create(
                 self.sb, "store_products",
                 {"store_id": self.store_id, "name": product_name},
-                {"unit": "g", "unit_amount": unit_amount},
+                {"unit": unit, "unit_amount": unit_amount},
             )
+            self.sb.table("store_products").update(
+                {"unit": unit, "unit_amount": unit_amount}
+            ).eq("id", store_product_id).execute()
 
-            self.sb.table("prices").insert({
-                "store_product_id": store_product_id,
-                "gross_price": p["price"],
-                "source": "flyer-ssr",
-                "valid_from": today,
-                "valid_to": valid_to,
-            }).execute()
+            replace_price(self.sb, store_product_id, "flyer-ssr",
+                          p["price"], today, valid_to)
 
             existing_mapping = self.sb.table("ingredient_mappings").select("id") \
                 .eq("ingredient_id", ingredient_id) \

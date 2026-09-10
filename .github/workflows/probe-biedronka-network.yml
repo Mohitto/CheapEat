@@ -1,7 +1,25 @@
-name: Probe Biedronka Network
+# Sonda diagnostyczna do gazetki Biedronki.
+#
+# Wcześniej uruchamiała probe_biedronka_network.py — jednorazowe
+# nasłuchiwanie ruchu sieciowego, którym znaleźliśmy leaflet-api. To
+# pytanie jest zamknięte (odpowiedź siedzi w docstringu
+# biedronka/scraper.py), a otwarte jest inne: dlaczego konkretna
+# promocja z konkretnej strony nie trafia do bazy. Przy 96-stronicowej
+# gazetce scraper nie może wypisać wszystkiego, więc od tego jest ten
+# przebieg. Sam probe_biedronka_network.py zostaje w repozytorium.
+name: Probe Biedronka Flyer Page
 
 on:
   workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Fragment slugu gazetki (np. codziennie)'
+        required: false
+        default: 'codziennie'
+      page:
+        description: 'Numer strony, licząc od 0'
+        required: false
+        default: '0'
 
 jobs:
   probe:
@@ -17,11 +35,23 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scrapers/requirements.txt
 
       - name: Install dependencies
-        run: |
-          pip install playwright requests
-          playwright install --with-deps chromium
+        run: pip install -r requirements.txt
 
-      - name: Probe Biedronka network traffic
-        run: python probe_biedronka_network.py
+      - name: Install Tesseract OCR (pol)
+        run: |
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Install EasyOCR (open source, CPU only)
+        run: pip install easyocr
+
+      - name: Can any free OCR engine read the prices
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_ocr_engines.py "${{ inputs.slug || 'codziennie' }}" "${{ inputs.page || '0' }}"
+

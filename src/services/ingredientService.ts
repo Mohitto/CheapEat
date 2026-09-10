@@ -102,17 +102,14 @@ export async function getIngredientMappings(
 }
 
 /**
- * Przelicza cenę całego opakowania na cenę za 100g/100ml składnika.
+ * Ile całych opakowań trzeba kupić, żeby pokryć zapotrzebowanie.
  *
- * `conversionFactor` (z ingredient_mappings) to gramatura/pojemność
- * opakowania podzielona przez 100 — np. opakowanie 500g kurczaka ma
- * factor = 5.0. Cena za 100g to więc grossPrice / conversionFactor
- * (np. kurczak 500g za 10 zł -> factor 5.0 -> 10 / 5.0 = 2 zł/100g).
+ * Składniki kupuje się w całych opakowaniach, nie w ułamkach — jeśli
+ * przepis potrzebuje 30g masła, w sklepie i tak kupujesz całą kostkę
+ * (np. 200g), nie 15% jej ceny. Współdzielone przez recipeService.ts
+ * (koszt pojedynczego przepisu) i cartService.ts (lista zakupów).
  */
-export function calculateIngredientCostPer100g(
-  grossPrice: number,
-  conversionFactor: number // z ingredient_mappings
-): number {
-  if (conversionFactor <= 0) return 0;
-  return grossPrice / conversionFactor;
+export function packagesNeeded(neededAmount: number, unitAmount: number): number {
+  if (unitAmount <= 0) return 1;
+  return Math.ceil(neededAmount / unitAmount);
 }

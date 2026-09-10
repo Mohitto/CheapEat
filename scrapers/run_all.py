@@ -4,11 +4,13 @@ import json
 from datetime import datetime
 
 from biedronka.scraper import BiedronkaScraper
+from biedronka.shop_scraper import BiedronkaShopScraper
 from lidl.scraper import LidlScraper
 # from aldi.scraper import AldiScraper      # odkomentuj gdy gotowy
 
 SCRAPERS = [
     BiedronkaScraper,
+    BiedronkaShopScraper,
     LidlScraper,
 ]
 
@@ -18,7 +20,11 @@ def main():
     errors = {}
 
     for ScraperClass in SCRAPERS:
-        name = ScraperClass.store_name
+        # Klucz musi być unikalny na klasę, nie na sklep — Biedronka ma
+        # dwa scrapery (gazetka + sklep regularny) z tym samym store_name,
+        # a store_name wprost jako klucz nadpisałby jeden wynik drugim
+        # w podsumowaniu poniżej.
+        name = ScraperClass.__name__
         print(f"\n{'='*50}")
         print(f"Scraper: {name}")
         print(f"{'='*50}")
