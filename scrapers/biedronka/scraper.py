@@ -60,18 +60,36 @@ def find_uuid(press_url: str) -> str:
 
 
 def get_page_image_urls(uuid: str) -> list[str]:
+    """Adresy WSZYSTKICH stron gazetki, bez powtórzeń.
+
+    "images_desktop" to rozkładówki: każda pozycja ma listę `images` z
+    dwiema stronami (okładka ma pustą lewą połowę). Wcześniejsza wersja
+    brała z tej listy pierwszy niepusty adres i przerywała, więc z
+    96-stronicowej gazetki czytaliśmy 49 stron — całą prawą kolumnę
+    rozkładówek pomijaliśmy w milczeniu.
+
+    "images_mobile" podaje te same pliki po jednym na stronę i jest
+    naturalniejszym źródłem; desktopowe rozkładówki zostają jako zapas,
+    bo to one były sprawdzone na żywo."""
     api_url = f"https://leaflet-api.prod.biedronka.cloud/api/leaflets/{uuid}?ctx=web"
     resp = requests.get(api_url, headers={**HEADERS, "Accept": "application/json"}, timeout=30)
     resp.raise_for_status()
     data = resp.json()
-    # Niektóre strony (np. okładka) mają pustą pierwszą pozycję w "images" —
-    # bierzemy pierwszy NIEPUSTY URL, nie zakładamy że images[0] nim jest.
-    urls = []
-    for p in data["images_desktop"]:
-        for img_url in p.get("images", []):
-            if img_url:
-                urls.append(img_url)
-                break
+
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(img_url: str | None) -> None:
+        if img_url and img_url not in seen:
+            seen.add(img_url)
+            urls.append(img_url)
+
+    for page in data.get("images_mobile") or []:
+        add(page.get("image"))
+    for page in data.get("images_desktop") or []:
+        for img_url in page.get("images", []):
+            add(img_url)
+
     return urls
 
 
