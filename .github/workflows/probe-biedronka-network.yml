@@ -24,6 +24,7 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: scrapers
@@ -40,6 +41,11 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Does this flyer exist as a real PDF, before OCR-ing anything
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_flyer_pdf.py "${{ inputs.slug || 'codziennie' }}"
 
       - name: Install Tesseract OCR (pol)
         run: |

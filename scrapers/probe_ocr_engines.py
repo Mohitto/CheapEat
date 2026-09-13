@@ -33,6 +33,7 @@ ani po), więc "199" nie złapie się na "1199".
 """
 import os
 import re
+import signal
 import subprocess
 import sys
 
@@ -118,56 +119,93 @@ def try_easyocr(path: str) -> None:
         score(f"EasyOCR {upscale}x", texts)
 
 
-def try_paddleocr(path: str) -> None:
+class _TimedOut(Exception):
+    pass
+
+
+def _raise_timeout(signum, frame):
+    raise _TimedOut()
+
+
+def try_paddleocr(path: str, budget_s: int = 240) -> None:
+    """Cały PaddleOCR (ładowanie modelu + odczyt obu powiększeń) pod
+    JEDNYM budżetem czasu.
+
+    Pierwsza próba tego pomiaru zawisła na krok "Install PaddleOCR" +
+    inicjalizacji modelu ponad 15 minut bez żadnego wyniku — PaddleOCR
+    pobiera wagi modelu przy pierwszym użyciu z bos.bcebos.com (Baidu),
+    który bywa bardzo wolny albo niedostępny spoza Chin. To i tak jest
+    odpowiedzią wartą zapisania: nawet gdyby sama jakość odczytu była
+    lepsza, silnik zależny od wolnego hostingu modeli nie nadaje się do
+    pipeline'u, który ma chodzić w CI. Budżet czasu sprawia, że ta sonda
+    to STWIERDZA zamiast wisieć w nieskończoność."""
     try:
         from paddleocr import PaddleOCR
     except ImportError as e:
         print(f"PaddleOCR niedostępny: {e}")
         return
 
-    # "pl" bywa niedostępny jako osobny model (PaddleOCR grupuje część
-    # języków łacińskich pod jednym modelem) — próbujemy po kolei zamiast
-    # zgadywać jedną poprawną nazwę.
-    ocr = None
-    for lang in ("pl", "latin", "en"):
-        try:
+    has_alarm = hasattr(signal, "SIGALRM")
+    if has_alarm:
+        old_handler = signal.signal(signal.SIGALRM, _raise_timeout)
+        signal.alarm(budget_s)
+
+    try:
+        # "pl" bywa niedostępny jako osobny model (PaddleOCR grupuje część
+        # języków łacińskich pod jednym modelem) — próbujemy po kolei
+        # zamiast zgadywać jedną poprawną nazwę.
+        ocr = None
+        for lang in ("pl", "latin", "en"):
             try:
-                ocr = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
-            except TypeError:
-                ocr = PaddleOCR(use_angle_cls=True, lang=lang)
-            print(f"PaddleOCR: model dla lang={lang} załadowany")
-            break
-        except Exception as e:
-            print(f"PaddleOCR: model dla lang={lang} niedostępny ({e})")
-    if ocr is None:
-        return
-
-    for upscale in (1, 2):
-        image = Image.open(path).convert("RGB")
-        if upscale != 1:
-            image = image.resize((image.width * upscale, image.height * upscale), Image.LANCZOS)
-        work = f"/tmp/engine_paddle_{upscale}.png"
-        image.save(work)
-
-        try:
-            try:
-                result = ocr.ocr(work, cls=True)
-            except TypeError:
-                result = ocr.ocr(work)
-        except Exception as e:
-            print(f"PaddleOCR {upscale}x: błąd odczytu ({e})")
-            continue
-
-        texts = []
-        for page in (result or []):
-            for line in (page or []):
                 try:
-                    text, conf = line[1]
-                except Exception:
-                    continue
-                if conf >= 0.3:
-                    texts.append(text)
-        score(f"PaddleOCR {upscale}x", texts)
+                    ocr = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+                except TypeError:
+                    ocr = PaddleOCR(use_angle_cls=True, lang=lang)
+                print(f"PaddleOCR: model dla lang={lang} załadowany")
+                break
+            except _TimedOut:
+                raise
+            except Exception as e:
+                print(f"PaddleOCR: model dla lang={lang} niedostępny ({e})")
+        if ocr is None:
+            return
+
+        for upscale in (1, 2):
+            image = Image.open(path).convert("RGB")
+            if upscale != 1:
+                image = image.resize((image.width * upscale, image.height * upscale), Image.LANCZOS)
+            work = f"/tmp/engine_paddle_{upscale}.png"
+            image.save(work)
+
+            try:
+                try:
+                    result = ocr.ocr(work, cls=True)
+                except TypeError:
+                    result = ocr.ocr(work)
+            except _TimedOut:
+                raise
+            except Exception as e:
+                print(f"PaddleOCR {upscale}x: błąd odczytu ({e})")
+                continue
+
+            texts = []
+            for page in (result or []):
+                for line in (page or []):
+                    try:
+                        text, conf = line[1]
+                    except Exception:
+                        continue
+                    if conf >= 0.3:
+                        texts.append(text)
+            score(f"PaddleOCR {upscale}x", texts)
+    except _TimedOut:
+        print(f"PaddleOCR: przekroczono budżet {budget_s}s (prawdopodobnie ładowanie "
+              f"modelu z bos.bcebos.com) — silnik wykluczony niezależnie od tego, jak "
+              f"dobrze czyta, bo pipeline ma chodzić w CI, nie czekać w nieskończoność")
+    finally:
+        if has_alarm:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
 
 def main() -> None:
