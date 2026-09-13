@@ -24,12 +24,30 @@ PaddleOCR (PP-OCRv4, Apache 2.0), bo padło pytanie, czy jest coś
 skuteczniejszego od EasyOCR — a jedyna uczciwa odpowiedź na to pytanie to
 pomiar na tej samej stronie, tą samą miarą, a nie zgadywanie z nazwy.
 
-UWAGA o dopasowaniu wyniku: pierwsza wersja tego skrytu liczyła trafienie
-przez zwykłe "czy podciąg '199' jest w tekście" — a "199" jest podciągiem
-"1199" (cena Raffaello obok masła na tej samej stronie). Wynik byłby
-fałszywie dodatni nawet gdyby silnik w ogóle nie zobaczył ceny masła.
-Dopasowanie jest teraz na GRANICACH LICZBY (żadna cyfra bezpośrednio przed
-ani po), więc "199" nie złapie się na "1199".
+UWAGA o dopasowaniu wyniku, wersja 1: pierwsza wersja tego skryptu liczyła
+trafienie przez zwykłe "czy podciąg '199' jest w tekście" — a "199" jest
+podciągiem "1199" (cena Raffaello obok masła na tej samej stronie). Wynik
+byłby fałszywie dodatni nawet gdyby silnik w ogóle nie zobaczył ceny
+masła. Naprawione dopasowaniem na GRANICACH LICZBY.
+
+UWAGA o dopasowaniu wyniku, wersja 2: ta poprawka odsłoniła kolejny,
+poważniejszy błąd. PRICE_HINTS to ceny PRZEPISANE Z KONKRETNEJ GAZETKI
+("oferta od 10.09"). Biedronka podmienia gazetkę co tydzień — kolejne
+uruchomienie tej sondy trafiło już w następną edycję ("oferta od 14.09"),
+z innymi promocjami na tej samej pierwszej stronie. Efekt: WSZYSTKIE
+silniki, łącznie z EasyOCR, wyszły z zerem trafień — nie dlatego że
+przestały czytać, tylko dlatego że szukały cen sprzed tygodnia, których
+na tej stronie już nie ma. Sonda z twardą listą wartości jest więc dobra
+tylko na tę jedną, konkretną gazetkę, którą miałem przed oczami piszący
+ją — nie nadaje się do ponownego uruchomienia bez ręcznej aktualizacji.
+
+Naprawa: PRICE_HINTS zostaje jako opcjonalna podpowiedź (gdy akurat
+pasuje — informacyjnie), ale główną miarą jest teraz KSZTAŁT ceny
+("dd,dd" albo skleiona 3-4-cyfrowa liczba spoza zakresu lat) — dokładnie
+to, co i tak sczytuje find_prices/GLUED_PRICE w prawdziwym pipeline.
+Próbka przeczytanego tekstu drukuje się ZAWSZE, nie tylko przy trafieniu,
+żeby dało się na oko zweryfikować, czy silnik w ogóle widzi to, co
+faktycznie wisi na aktualnej stronie.
 """
 import os
 import re
@@ -70,14 +88,34 @@ def _hint_pattern(hint: str) -> re.Pattern:
 
 _HINT_PATTERNS = {h: _hint_pattern(h) for h in PRICE_HINTS}
 
+# Kształt ceny — nie wartość — bo wartości ze starej gazetki są bez
+# znaczenia dla nowej edycji. To ten sam kształt, którego szuka
+# find_prices()/GLUED_PRICE w prawdziwym pipeline (flyer_ocr.py):
+# "dd,dd" wprost, albo skleiona liczba 3-4-cyfrowa spoza zakresu lat.
+PRICE_SHAPE_FULL = re.compile(r'^\d{1,3},\d{2}$')
+PRICE_SHAPE_GLUED = re.compile(r'^\d{3,4}$')
+
+
+def _price_shaped(texts: list[str]) -> list[str]:
+    shaped = []
+    for t in texts:
+        if PRICE_SHAPE_FULL.match(t):
+            shaped.append(t)
+        elif PRICE_SHAPE_GLUED.match(t) and not 1900 <= int(t) <= 2100:
+            shaped.append(t)
+    return shaped
+
 
 def score(name: str, texts: list[str]) -> None:
-    """Ile z cen, które NAPRAWDĘ są na tej stronie, silnik odczytał."""
+    """Ile z cen, które NAPRAWDĘ są na tej stronie, silnik odczytał —
+    plus, zawsze, próbka surowego tekstu, żeby dało się to zweryfikować
+    na oko niezależnie od tego, która edycja gazetki akurat wisi."""
     joined = " ".join(texts)
     hit = sorted(h for h, pattern in _HINT_PATTERNS.items() if pattern.search(joined))
-    print(f"{name:38s} fragmentów={len(texts):4d}  trafione ceny={hit}")
-    if hit:
-        print(f"    próbka: {' | '.join(texts[:40])[:400]}")
+    shaped = _price_shaped(texts)
+    print(f"{name:38s} fragmentów={len(texts):4d}  "
+          f"trafione_ze_starej_listy={hit}  ksztaltem_ceny={shaped[:20]}")
+    print(f"    próbka (pierwsze 50): {' | '.join(texts[:50])[:600]}")
 
 
 def try_tesseract(path: str, oem: str, psm: str, upscale: int) -> None:
