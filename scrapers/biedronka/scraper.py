@@ -13,13 +13,15 @@ aplikacji:
      wygasłe znikają same.
   2. Strona press,id,... zawiera window.galleryLeaflet.init("{UUID}"),
      a leaflet-api pod tym UUID-em zwraca adresy obrazków stron.
-  3. biedronka/leaflet_ocr.py — OCR ze współrzędnymi każdego słowa. Cenę
-     wiążemy z nazwą produktu i gramaturą po ODLEGŁOŚCI NA STRONIE, bo
-     gazetka to siatka kafelków i kolejność czytania tekstu nie odpowiada
-     układowi. Silniki są dwa i oba darmowe (projekt ma pozostać
-     bezpłatny, więc świadomie bez płatnych API wizyjnych): tesseract
-     przegląda wszystkie strony, EasyOCR czyta te, na których coś jest —
-     powód tego podziału opisuje docstring leaflet_ocr.py.
+  3. scrapers/flyer_ocr.py — silnik OCR WSPÓLNY dla wszystkich sklepów z
+     gazetką jako obrazkiem (nie tylko Biedronki), więc nic tu nie jest
+     Biedronka-specyficzne poza samym faktem, że to pierwszy sklep, który
+     go używa. Cenę wiążemy z nazwą produktu i gramaturą po ODLEGŁOŚCI NA
+     STRONIE, bo gazetka to siatka kafelków i kolejność czytania tekstu
+     nie odpowiada układowi. Silniki są dwa i oba darmowe (projekt ma
+     pozostać bezpłatny, więc świadomie bez płatnych API wizyjnych):
+     tesseract przegląda wszystkie strony, EasyOCR czyta te, na których
+     coś jest — powód tego podziału opisuje docstring flyer_ocr.py.
 
 Klasyfikacja do kategorii składnika jest markowo-agnostyczna i wspólna z
 pozostałymi sklepami — patrz scrapers/ingredient_catalog.py.
@@ -46,7 +48,7 @@ from ingredient_catalog import (
 )
 
 from .flyers import scrapable_flyers
-from .leaflet_ocr import extract_candidates, ocr_page, ocr_page_precise
+from flyer_ocr import extract_candidates, ocr_page, ocr_page_precise
 
 DEBUG = os.environ.get("SCRAPER_DEBUG") == "1"
 

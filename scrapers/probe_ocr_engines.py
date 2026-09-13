@@ -41,7 +41,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from biedronka.flyers import scrapable_flyers
-from biedronka.leaflet_ocr import HEADERS
+from flyer_ocr import HEADERS
 from biedronka.scraper import find_uuid, get_page_image_urls
 
 PRICE_HINTS = ("1,99", "199", "5,99", "599", "0,99", "099", "11,99", "1199",

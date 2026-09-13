@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from biedronka.flyers import scrapable_flyers
-from biedronka.leaflet_ocr import (
+from flyer_ocr import (
     _find_specs, extract_candidates, find_prices, ocr_page, tile_text,
     unit_price_scale,
 )

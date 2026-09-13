@@ -1,5 +1,11 @@
 """
-test_leaflet_ocr.py — odczyt kafelka gazetki, na sztucznych tokenach OCR.
+test_flyer_ocr.py — odczyt kafelka gazetki, na sztucznych tokenach OCR.
+
+Test wspólnego silnika (flyer_ocr.py), nie samej Biedronki — ale
+przypadki testowe są z prawdziwej gazetki Biedronki, bo to na razie
+jedyny sklep z gazetką jako obrazkiem. Kolejny sklep tego typu powinien
+dołożyć tu swoje własne kafelki (inny krój cen, inna forma promocji
+warunkowych), a nie zakładać, że te same wystarczą.
 
 Gazetka jest obrazkiem, więc jedyny sposób sprawdzenia tej logiki bez
 sieci i bez tesseracta to podać jej takie tokeny, jakie OCR zwraca z
@@ -9,13 +15,13 @@ gazetki "Codziennie niskie ceny" (nr 37/2026, oferta od 10.09): masło
 wagę — dokładnie te dwa przypadki, na których poprzednia wersja
 scrapera się wykładała.
 
-Uruchomienie: python3 scrapers/test_leaflet_ocr.py
+Uruchomienie: python3 scrapers/test_flyer_ocr.py
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from biedronka.leaflet_ocr import Token, _split_fragment, extract_candidates
+from flyer_ocr import Token, _split_fragment, extract_candidates
 
 PAGE_WIDTH = 2000
 

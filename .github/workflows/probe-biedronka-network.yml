@@ -51,7 +51,15 @@ jobs:
         run: pip install easyocr
 
       - name: Install PaddleOCR (open source, CPU only)
-        run: pip install "paddlepaddle==2.6.2" "paddleocr==2.7.3"
+        run: |
+          pip install "paddlepaddle==2.6.2" "paddleocr==2.7.3"
+          # paddleocr ciągnie pandas>=3, które wymusza numpy 2.x — a
+          # skompilowane koła EasyOCR (opencv-python) i samego PaddleOCR
+          # (opencv-contrib-python) mają zaszyte ABI numpy 1.x. Efekt bez
+          # tej linii: OBA silniki padają przy imporcie ("module compiled
+          # against ABI version 0x1000009 but this version of numpy is
+          # 0x2000000"), zmierzone na żywo w tym samym przebiegu.
+          pip install "numpy<2"
 
       - name: Can any free OCR engine read the prices
         env:

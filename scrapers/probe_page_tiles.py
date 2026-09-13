@@ -27,7 +27,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from biedronka.flyers import scrapable_flyers
-from biedronka.leaflet_ocr import (
+from flyer_ocr import (
     DECIMAL_PART, FULL_PRICE, GLUED_PRICE, HEADERS, INTEGER_PART, Token,
 )
 from biedronka.scraper import find_uuid, get_page_image_urls

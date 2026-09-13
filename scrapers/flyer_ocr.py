@@ -1,11 +1,20 @@
 """
-leaflet_ocr.py — odczyt cen ze stron gazetki po UKŁADZIE GRAFICZNYM.
+flyer_ocr.py — wspólny silnik do odczytu cen ze stron gazetki po UKŁADZIE
+GRAFICZNYM. Nie jest specyficzny dla żadnego sklepu — każdy scraper
+gazetki (obecnie tylko Biedronka; Lidl publikuje ceny jako dane, nie
+obrazki, więc w ogóle tego modułu nie potrzebuje) dostarcza tylko dwie
+rzeczy, które NIE dają się uogólnić: gdzie leżą strony gazetki i kiedy są
+ważne (patrz biedronka/flyers.py jako wzór). Cała reszta — silniki OCR,
+wiązanie ceny z nazwą po odległości, oferty warunkowe, produkty na wagę —
+jest tutaj i nadaje się do ponownego użycia bez zmian dla kolejnego
+sklepu, który też publikuje gazetkę jako obrazek zamiast jako dane.
 
-Poprzednie podejście spłaszczało stronę do jednego ciągu tekstu i szukało
-nazwy składnika w oknie ~200 znaków przed ceną. Strona gazetki to jednak
-siatka kafelków, a kolejność czytania OCR nie odpowiada układowi: cena
-bywa oddzielona od swojej nazwy setkami znaków z sąsiedniego kafelka.
-Efekt: z 52 stron wyciągaliśmy ceny dla 2 składników.
+Poprzednie podejście (sprzed tego modułu) spłaszczało stronę do jednego
+ciągu tekstu i szukało nazwy składnika w oknie ~200 znaków przed ceną.
+Strona gazetki to jednak siatka kafelków, a kolejność czytania OCR nie
+odpowiada układowi: cena bywa oddzielona od swojej nazwy setkami znaków
+z sąsiedniego kafelka. Efekt na gazetce Biedronki: z 52 stron
+wyciągaliśmy ceny dla 2 składników.
 
 Tutaj korzystamy z tego, że tesseract w trybie TSV podaje ramkę każdego
 słowa, więc cenę wiążemy z nazwą po ODLEGŁOŚCI NA STRONIE. Zmierzone na
@@ -21,8 +30,11 @@ Powiększenie 2x i tryb "rzadkiego tekstu" dają ~+50% słów i ~+80% cen.
 
 DWA SILNIKI, I TO NIE Z KAPRYSU
 -------------------------------
-Tesseract NIE odczytuje cen z gazetki Biedronki. Nie "słabo" — wcale.
-Zmierzone na stronie tytułowej (probe_ocr_variants.py, probe_page_tiles.py,
+Tesseract NIE odczytuje cen z gazetki Biedronki (pierwszy sklep, dla
+którego ten moduł powstał — ale krój cen bywa firmowy per sieć, więc dla
+kolejnego sklepu ten sam pomiar warto powtórzyć, zamiast zakładać, że
+wynik się przeniesie). Nie "słabo" — wcale. Zmierzone na stronie
+tytułowej gazetki Biedronki (probe_ocr_variants.py, probe_page_tiles.py,
 probe_leaflet_images.py), gdzie wydrukowane są masło 1,99, papryka 5,99 i
 filet 14,99:
 
