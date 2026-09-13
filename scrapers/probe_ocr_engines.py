@@ -16,17 +16,23 @@ ciężka, firmowa czcionka z groszami wyniesionymi do góry jak indeks, bez
 przecinka, często ze stykającymi się cyframi. Model `pol` tesseracta nie
 widział takich kształtów.
 
-Zostają dwie drogi, obie darmowe i otwartoźródłowe (projekt ma pozostać
-bezpłatny, więc płatne API wizyjne odpadają z definicji):
+Zostały wtedy dwie drogi, obie darmowe i otwartoźródłowe (projekt ma
+pozostać bezpłatny, więc płatne API wizyjne odpadają z definicji): inny
+silnik z siecią neuronową (EasyOCR — wygrał, patrz leaflet_ocr.py) i
+tesseract w silniku "legacy". Ten skrypt dokłada TRZECI kandydat,
+PaddleOCR (PP-OCRv4, Apache 2.0), bo padło pytanie, czy jest coś
+skuteczniejszego od EasyOCR — a jedyna uczciwa odpowiedź na to pytanie to
+pomiar na tej samej stronie, tą samą miarą, a nie zgadywanie z nazwy.
 
-  1. inny silnik OCR z modelem sieciowym — EasyOCR;
-  2. tesseract w silniku "legacy" (--oem 0), który używa dopasowania
-     kształtów zamiast sieci rekurencyjnej i bywa lepszy w napisach
-     plakatowych.
-
-Sprawdzamy obie na tej samej stronie i tą samą miarą.
+UWAGA o dopasowaniu wyniku: pierwsza wersja tego skrytu liczyła trafienie
+przez zwykłe "czy podciąg '199' jest w tekście" — a "199" jest podciągiem
+"1199" (cena Raffaello obok masła na tej samej stronie). Wynik byłby
+fałszywie dodatni nawet gdyby silnik w ogóle nie zobaczył ceny masła.
+Dopasowanie jest teraz na GRANICACH LICZBY (żadna cyfra bezpośrednio przed
+ani po), więc "199" nie złapie się na "1199".
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -54,10 +60,20 @@ def download_page(slug: str, page_index: int) -> str:
     return path
 
 
+def _hint_pattern(hint: str) -> re.Pattern:
+    """Wzorzec dopasowujący `hint` tylko jako CAŁĄ liczbę — bez cyfry
+    bezpośrednio przed ani po, żeby "199" nie łapało się na "1199"."""
+    escaped = re.escape(hint)
+    return re.compile(rf'(?<!\d)(?<![,.]){escaped}(?![\d,.])')
+
+
+_HINT_PATTERNS = {h: _hint_pattern(h) for h in PRICE_HINTS}
+
+
 def score(name: str, texts: list[str]) -> None:
     """Ile z cen, które NAPRAWDĘ są na tej stronie, silnik odczytał."""
     joined = " ".join(texts)
-    hit = sorted({h for h in PRICE_HINTS if h in joined})
+    hit = sorted(h for h, pattern in _HINT_PATTERNS.items() if pattern.search(joined))
     print(f"{name:38s} fragmentów={len(texts):4d}  trafione ceny={hit}")
     if hit:
         print(f"    próbka: {' | '.join(texts[:40])[:400]}")
@@ -102,6 +118,58 @@ def try_easyocr(path: str) -> None:
         score(f"EasyOCR {upscale}x", texts)
 
 
+def try_paddleocr(path: str) -> None:
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError as e:
+        print(f"PaddleOCR niedostępny: {e}")
+        return
+
+    # "pl" bywa niedostępny jako osobny model (PaddleOCR grupuje część
+    # języków łacińskich pod jednym modelem) — próbujemy po kolei zamiast
+    # zgadywać jedną poprawną nazwę.
+    ocr = None
+    for lang in ("pl", "latin", "en"):
+        try:
+            try:
+                ocr = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+            except TypeError:
+                ocr = PaddleOCR(use_angle_cls=True, lang=lang)
+            print(f"PaddleOCR: model dla lang={lang} załadowany")
+            break
+        except Exception as e:
+            print(f"PaddleOCR: model dla lang={lang} niedostępny ({e})")
+    if ocr is None:
+        return
+
+    for upscale in (1, 2):
+        image = Image.open(path).convert("RGB")
+        if upscale != 1:
+            image = image.resize((image.width * upscale, image.height * upscale), Image.LANCZOS)
+        work = f"/tmp/engine_paddle_{upscale}.png"
+        image.save(work)
+
+        try:
+            try:
+                result = ocr.ocr(work, cls=True)
+            except TypeError:
+                result = ocr.ocr(work)
+        except Exception as e:
+            print(f"PaddleOCR {upscale}x: błąd odczytu ({e})")
+            continue
+
+        texts = []
+        for page in (result or []):
+            for line in (page or []):
+                try:
+                    text, conf = line[1]
+                except Exception:
+                    continue
+                if conf >= 0.3:
+                    texts.append(text)
+        score(f"PaddleOCR {upscale}x", texts)
+
+
 def main() -> None:
     slug = sys.argv[1] if len(sys.argv) > 1 else "codziennie"
     page_index = int(sys.argv[2]) if len(sys.argv) > 2 else 0
@@ -113,6 +181,9 @@ def main() -> None:
 
     print()
     try_easyocr(path)
+
+    print()
+    try_paddleocr(path)
 
 
 if __name__ == "__main__":

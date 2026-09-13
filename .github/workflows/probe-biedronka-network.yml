@@ -50,6 +50,9 @@ jobs:
       - name: Install EasyOCR (open source, CPU only)
         run: pip install easyocr
 
+      - name: Install PaddleOCR (open source, CPU only)
+        run: pip install "paddlepaddle==2.6.2" "paddleocr==2.7.3"
+
       - name: Can any free OCR engine read the prices
         env:
           PYTHONUNBUFFERED: '1'
