@@ -521,11 +521,27 @@ LOOSE_SCALE_UNIT = {"kg": "g", "l": "ml"}
 BUNDLE_X_PLUS_Y = re.compile(r'\b(\d)\s*\+\s*(\d)\s*gratis\b')
 BUNDLE_PRZY_ZAKUPIE = re.compile(r'\bprzy\s+zakupi[eu]\s+(\d)\b')
 BUNDLE_KAZDA_Z = re.compile(r'\bkazd[aey]\s*z\s*(\d)\s*szt')
-# "OFERTA OD 10.09 DO 12.09" — gazetka trwa tydzień, ale pojedyncza
-# promocja bywa krótsza. Data z kafelka jest dokładniejsza niż data
-# całej gazetki, więc cena wygasa wtedy, kiedy naprawdę wygasa.
-OFFER_PERIOD = re.compile(
+# Data ważności na kafelku bywa zapisana na kilka różnych sposobów — i to
+# NIE jest kwestia jednorazowej niekonsekwencji: między dwoma kolejnymi
+# wydaniami tej samej gazetki Biedronka zmieniła format z "OFERTA OD
+# 10.09 DO 12.09" na "TYLKO W PONIEDZIAŁEK 14.09" / "WTOREK – SOBOTA
+# 15.09-19.09" (ta sama promocja na masło, dwa tygodnie z rzędu, dwa
+# różne zapisy daty). Kod pisany pod jeden format cichnie na drugim —
+# find_offer_period po prostu nie znajduje żadnej daty i cena dostaje
+# ważność całej gazetki zamiast prawdziwej, krótszej. Trzy wzorce
+# zamiast jednego, żeby to się nie powtórzyło przy kolejnej zmianie
+# szablonu.
+OFFER_PERIOD_OD_DO = re.compile(
     r'\bod\s+(\d{1,2})[.,](\d{1,2})\s+do\s+(\d{1,2})[.,](\d{1,2})\b')
+# "WTOREK – SOBOTA 15.09-19.09" / "PONIEDZIAŁEK - SOBOTA 14.09-19.09" —
+# nazwy dni tygodnia nie są sprawdzane (i tak nie muszą się zgadzać z
+# kalendarzem, żeby dwie daty złączone myślnikiem znaczyły okres).
+OFFER_PERIOD_RANGE = re.compile(
+    r'(\d{1,2})[.,](\d{1,2})\s*[-–—]\s*(\d{1,2})[.,](\d{1,2})\b')
+# "TYLKO W PONIEDZIAŁEK 14.09" — jeden dzień, więc początek i koniec to
+# ta sama data.
+OFFER_PERIOD_SINGLE_DAY = re.compile(
+    r'\btylko\s+w\s+\w+\s+(\d{1,2})[.,](\d{1,2})\b')
 # Promocje "z kartą lub apką" wymagają karty Moja Biedronka — cena bez
 # niej jest inna, więc apka musi to napisać wprost.
 # Odstęp jest opcjonalny: znaczek "Z KARTĄ LUB APKĄ" jest ciasno złożony
@@ -594,11 +610,22 @@ def find_bundle(text: str) -> dict | None:
 
 
 def find_offer_period(text: str) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    """((dzień, miesiąc) od, (dzień, miesiąc) do) z napisu na kafelku."""
-    m = OFFER_PERIOD.search(text)
-    if not m:
-        return None
-    d1, m1, d2, m2 = (int(g) for g in m.groups())
+    """((dzień, miesiąc) od, (dzień, miesiąc) do) z napisu na kafelku, w
+    którymkolwiek z formatów opisanych przy wzorcach wyżej. Próbujemy po
+    kolei od najbardziej jednoznacznego (słowa "od"/"do") do najluźniej
+    związanego z konkretnymi słowami (goła para dat myślnikiem)."""
+    for pattern in (OFFER_PERIOD_OD_DO, OFFER_PERIOD_RANGE):
+        m = pattern.search(text)
+        if m:
+            d1, m1, d2, m2 = (int(g) for g in m.groups())
+            break
+    else:
+        m = OFFER_PERIOD_SINGLE_DAY.search(text)
+        if not m:
+            return None
+        d1, m1 = (int(g) for g in m.groups())
+        d2, m2 = d1, m1
+
     if not (1 <= d1 <= 31 and 1 <= m1 <= 12 and 1 <= d2 <= 31 and 1 <= m2 <= 12):
         return None
     return ((d1, m1), (d2, m2))

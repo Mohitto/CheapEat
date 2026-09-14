@@ -166,6 +166,76 @@ def main() -> int:
                     str(c["valid_from"]))
         ok &= check("wymaga karty", c["loyalty"] is True)
 
+    # --- masło, gazetka nr 38/2026 (tydzień od 14.09) --------------------
+    #
+    # Ten sam produkt, tydzień później: dwie osobne oferty na jednej
+    # stronie, z DWOMA RÓŻNYMI zapisami daty, żadnym z nich "OD dd.mm DO
+    # dd.mm" — dokładnie ten format, pod który był pisany OFFER_PERIOD
+    # (teraz OFFER_PERIOD_OD_DO). Bez tych dwóch dodatkowych wzorców obie
+    # oferty dostawałyby ważność całej gazetki zamiast swojej prawdziwej,
+    # krótszej. Przepisane ze zrzutu ekranu prawdziwej gazetki w apce.
+    print("\nKafelek masła: 'TYLKO W PONIEDZIAŁEK 14.09' (jeden dzień)")
+    monday_tile = tile([
+        ("TYLKO", 150, 380, 60, 30), ("W", 215, 380, 20, 30),
+        ("PONIEDZIAŁEK", 240, 380, 190, 30), ("14.09", 435, 380, 80, 30),
+        ("ZKARTĄ", 150, 460, 90, 40), ("LUB", 245, 460, 40, 40), ("APKĄ", 290, 460, 55, 40),
+        ("PRZY", 150, 510, 60, 46), ("ZAKUPIE", 215, 510, 105, 46), ("5", 325, 510, 15, 46),
+        ("66%", 150, 565, 55, 60), ("TANIEJ", 210, 565, 120, 60),
+        ("KAŻDA", 150, 640, 70, 34), ("Z", 225, 640, 18, 34), ("5", 248, 640, 15, 34), ("SZTUK", 268, 640, 70, 34),
+        ("199", 160, 680, 150, 120),
+        ("Cena", 420, 505, 40, 24), ("przed", 465, 505, 45, 24), ("obniżką:", 515, 505, 75, 24),
+        ("5,99", 610, 500, 70, 30),
+        ("Cena", 420, 555, 40, 22), ("za", 465, 555, 25, 22), ("1", 495, 555, 12, 22), ("szt.", 512, 555, 32, 22),
+        ("bez", 550, 555, 32, 22), ("karty", 587, 555, 45, 22), ("MB", 637, 555, 27, 22),
+        ("poza", 670, 555, 38, 22), ("limitem:", 713, 555, 68, 22),
+        ("5,99", 420, 595, 60, 24), ("29,95", 490, 595, 60, 24), ("zł/kg", 555, 595, 50, 24),
+        ("Masło", 150, 1150, 71, 32), ("Ekstra", 226, 1150, 86, 32), ("z", 316, 1150, 14, 32),
+        ("Polskiej", 335, 1150, 114, 32), ("Mleczarni,", 454, 1150, 143, 32), ("200", 602, 1150, 45, 32), ("g", 652, 1150, 14, 32),
+        ("Limit", 150, 1200, 50, 26), ("dzienny", 205, 1200, 68, 26), ("5", 278, 1200, 15, 26),
+        ("szt.", 298, 1200, 32, 26), ("na", 335, 1200, 22, 26), ("kartę", 362, 1200, 50, 26),
+        ("Moja", 417, 1200, 42, 26), ("Biedronka.", 464, 1200, 96, 26),
+    ])
+    got = extract_candidates(monday_tile, 2292)
+    masło = [c for c in got if c["ingredient_name"] == "masło"]
+    ok &= check("dokładnie jedna oferta na masło (nie łapie 'ceny przed obniżką')",
+                len(masło) == 1, f"{len(masło)}: {[(c['package_price'], c.get('bundle_units')) for c in masło]}")
+    if masło:
+        c = masło[0]
+        ok &= check("przy zakupie 5 sztuk po 1,99", c["bundle_units"] == 5 and c["single_price"] == 1.99,
+                    f"bundle={c['bundle_units']} single={c['single_price']}")
+        ok &= check("jeden dzień: początek = koniec = 14.09",
+                    c["valid_from"] == (14, 9) and c["valid_to"] == (14, 9),
+                    f"{c['valid_from']}..{c['valid_to']}")
+
+    print("\nKafelek masła: 'WTOREK – SOBOTA 15.09-19.09' (zakres dat myślnikiem)")
+    tue_sat_tile = tile([
+        ("WTOREK", 1250, 380, 90, 30), ("–", 1345, 380, 15, 30), ("SOBOTA", 1365, 380, 90, 30),
+        ("15.09-19.09", 1460, 380, 160, 30),
+        ("ZKARTĄ", 1250, 460, 90, 40), ("LUB", 1345, 460, 40, 40), ("APKĄ", 1390, 460, 55, 40),
+        ("PRZY", 1250, 510, 60, 46), ("ZAKUPIE", 1315, 510, 105, 46), ("3", 1425, 510, 15, 46),
+        ("58%", 1250, 565, 55, 60), ("TANIEJ", 1310, 565, 120, 60),
+        ("KAŻDA", 1250, 640, 70, 34), ("Z", 1325, 640, 18, 34), ("3", 1348, 640, 15, 34), ("SZTUK", 1368, 640, 70, 34),
+        ("249", 1260, 680, 150, 120),
+        ("Cena", 1520, 505, 40, 24), ("przed", 1565, 505, 45, 24), ("obniżką:", 1615, 505, 75, 24),
+        ("5,99", 1710, 500, 70, 30),
+        ("Masło", 1250, 1150, 71, 32), ("Ekstra", 1326, 1150, 86, 32), ("z", 1416, 1150, 14, 32),
+        ("Polskiej", 1435, 1150, 114, 32), ("Mleczarni,", 1554, 1150, 143, 32), ("200", 1702, 1150, 45, 32), ("g", 1752, 1150, 14, 32),
+        ("Limit", 1250, 1200, 50, 26), ("dzienny", 1305, 1200, 68, 26), ("6", 1378, 1200, 15, 26),
+        ("szt.", 1398, 1200, 32, 26), ("na", 1435, 1200, 22, 26), ("kartę", 1462, 1200, 50, 26),
+        ("Moja", 1517, 1200, 42, 26), ("Biedronka.", 1564, 1200, 96, 26),
+    ])
+    got = extract_candidates(tue_sat_tile, 2292)
+    masło = [c for c in got if c["ingredient_name"] == "masło"]
+    ok &= check("dokładnie jedna oferta na masło", len(masło) == 1,
+                f"{len(masło)}: {[(c['package_price'], c.get('bundle_units')) for c in masło]}")
+    if masło:
+        c = masło[0]
+        ok &= check("przy zakupie 3 sztuk po 2,49", c["bundle_units"] == 3 and c["single_price"] == 2.49,
+                    f"bundle={c['bundle_units']} single={c['single_price']}")
+        ok &= check("zakres myślnikiem: 15.09 do 19.09",
+                    c["valid_from"] == (15, 9) and c["valid_to"] == (19, 9),
+                    f"{c['valid_from']}..{c['valid_to']}")
+
     print("\nWYNIK:", "wszystko zgodne z gazetką" if ok else "są rozbieżności")
     return 0 if ok else 1
 
