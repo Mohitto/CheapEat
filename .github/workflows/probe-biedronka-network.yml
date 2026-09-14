@@ -54,7 +54,13 @@ jobs:
           sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
 
       - name: Install EasyOCR (open source, CPU only)
-        run: pip install easyocr
+        run: |
+          # Domyślne koło torch z PyPI ciągnie pełny zestaw bibliotek CUDA
+          # (kilka GB), zbędny na tym CPU-only runnerze i odpowiedzialny za
+          # większość czasu tego kroku — patrz verify-recipe-cost.yml,
+          # gdzie ten sam problem zmierzono wprost.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr
 
       - name: Install PaddleOCR (open source, CPU only)
         run: |
