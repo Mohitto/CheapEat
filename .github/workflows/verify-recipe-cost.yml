@@ -17,8 +17,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: scrapers/requirements.txt
+          # BEZ cache: 'pip' — jednorazowo. Poprzedni klucz cache'u wskazuje
+          # dalej na STARY, ~2,9 GB blob (sprzed przejścia na koło CPU-only
+          # niżej) i jego przywracanie wisiało >20 minut, mimo że sam zapis
+          # tego typu ilości danych wcześniej trwał sekundy — więc to nie
+          # (tylko) rozmiar, ale i coś w samej usłudze cache dziś. Ten
+          # przebieg zapisze NOWY, dużo mniejszy cache pod tym samym
+          # kluczem; następny commit włączy cache z powrotem, licząc na to,
+          # że mniejszy i świeży wpis przywróci się normalnie.
 
       - name: Install PyTorch (CPU-only wheel, not the default CUDA one)
         run: |
