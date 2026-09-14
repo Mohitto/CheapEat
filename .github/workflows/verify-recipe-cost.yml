@@ -17,14 +17,82 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: scrapers/requirements.txt
+          # BEZ cache: 'pip' — jednorazowo. Poprzedni klucz cache'u wskazuje
+          # dalej na STARY, ~2,9 GB blob (sprzed przejścia na koło CPU-only
+          # niżej) i jego przywracanie wisiało >20 minut, mimo że sam zapis
+          # tego typu ilości danych wcześniej trwał sekundy — więc to nie
+          # (tylko) rozmiar, ale i coś w samej usłudze cache dziś. Ten
+          # przebieg zapisze NOWY, dużo mniejszy cache pod tym samym
+          # kluczem; następny commit włączy cache z powrotem, licząc na to,
+          # że mniejszy i świeży wpis przywróci się normalnie.
+
+      - name: Install PyTorch (CPU-only wheel, not the default CUDA one)
+        run: |
+          # easyocr ciągnie torch, a domyślne koło z PyPI to wariant z
+          # PEŁNYM zestawem bibliotek CUDA (cublas, cudnn, nccl, cusparse,
+          # nvjitlink, ...) — kilka gigabajtów, których runner GitHub
+          # Actions (CPU-only, bez GPU) nigdy nie użyje. To one, nie sam
+          # torch, odpowiadały za ~2,9 GB cache'u pip i wielominutowe
+          # (a bywało, że wielunastominutowe) instalacje/przywracanie —
+          # zmierzone na żywo: usunięcie cache'u nie pomogło, bo ten sam
+          # ciężar i tak trzeba było ściągnąć od nowa. Instalujemy torch
+          # z oficjalnego indeksu kół CPU-only PRZED resztą, żeby pip nie
+          # sięgnął po wariant z CUDA przy rozwiązywaniu zależności
+          # easyocr.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install Tesseract OCR (pol)
+        run: |
+          # Obrazy runnerów mają doklejone repozytoria firm trzecich (Chrome),
+          # które potrafią serwować nieaktualny indeks i wywalić apt-get update
+          # na niezgodności sumy kontrolnej — co nie ma nic wspólnego z
+          # pakietami, których potrzebujemy. Nie zależymy od nich, więc precz
+          # (nazwa pliku bywa różna: .list albo .sources, stąd szukanie treści).
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          # Nieudane odświeżenie indeksów nie może blokować instalacji —
+          # tesseract jest w głównym archiwum Ubuntu. Jeśli mimo to nie da się
+          # go zainstalować, padnie następna komenda i zobaczymy to wprost.
+          sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Test flyer tile reading (no network)
+        run: python test_flyer_ocr.py
+
+      - name: Purge bad/stale price rows
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python cleanup_bad_mappings.py
+
+      - name: Re-seed test recipes (egg units in pieces)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python seed_dev_data.py
+
+      - name: Re-run all scrapers with unit-aware packages
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python run_all.py
 
       - name: Compute recipe cost from real Supabase data
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
         run: python verify_recipe_cost.py
+
+      - name: Dump full price/mapping state per ingredient
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python diagnose_prices.py
