@@ -17,8 +17,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: scrapers/requirements.txt
+          # BEZ cache: 'pip' — tymczasowo. Ten krok zawieszał się na
+          # kilkanaście-dwadzieścia minut w kółko, zawsze na tym samym
+          # miejscu (przywracanie cache'u), odkąd requirements.txt zaczął
+          # ciągnąć easyocr -> torch (cache po udanym zapisie ważył ~2,9 GB).
+          # Wyłączenie cache'u to test tej hipotezy, nie stały stan: jeśli
+          # przebieg przejdzie płynnie bez niego, wraca pytanie "jak
+          # cache'ować rozsądnie", a nie "czy w ogóle cache'ować".
 
       - name: Install dependencies
         run: pip install -r requirements.txt
