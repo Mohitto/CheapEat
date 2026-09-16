@@ -247,6 +247,22 @@ class BiedronkaScraper:
             missing = [n for n in INGREDIENT_KEYWORDS if n not in priced]
             print(f"[Biedronka] Kategorie bez ceny w gazetkach: {missing}")
 
+        # Błąd na POJEDYNCZEJ stronie (złe zdjęcie, chwilowy problem sieci)
+        # jest normalny i dlatego łapany wyżej po cichu — ale błąd na
+        # KAŻDEJ stronie to nie pech, tylko zepsuty silnik OCR (np.
+        # niezgodność wersji torch/torchvision — zmierzone na żywo:
+        # wszystkie 103 strony padały na ten sam wyjątek, a scraper i tak
+        # zwrócił kod sukcesu). To rozróżnienie ginęło w stu identycznie
+        # wyglądających liniach "pomijam", więc systemowa awaria wygląda
+        # tak samo jak garść pojedynczych niepowodzeń, dopóki ktoś nie
+        # policzy linii ręcznie.
+        if to_read and pages_read == 0:
+            raise RuntimeError(
+                f"Silnik OCR nie przeczytał ANI JEDNEJ z {len(to_read)} "
+                f"obiecujących stron — to systemowa awaria (np. niezgodność "
+                f"wersji torch/torchvision), nie pojedyncze złe zdjęcia."
+            )
+
         saved = self._save(found_per_ingredient)
         return {
             "flyers": len(flyers),

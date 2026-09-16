@@ -55,11 +55,15 @@ jobs:
 
       - name: Install EasyOCR (open source, CPU only)
         run: |
-          # Domyślne koło torch z PyPI ciągnie pełny zestaw bibliotek CUDA
-          # (kilka GB), zbędny na tym CPU-only runnerze i odpowiedzialny za
-          # większość czasu tego kroku — patrz verify-recipe-cost.yml,
-          # gdzie ten sam problem zmierzono wprost.
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # Domyślne koła z PyPI ciągną pełny zestaw bibliotek CUDA (kilka
+          # GB), zbędny na tym CPU-only runnerze — patrz verify-recipe-cost.yml.
+          # torch I torchvision muszą iść RAZEM z tego samego indeksu w
+          # jednym poleceniu: instalacja samego torch stąd, a torchvision
+          # przez zwykłe `pip install easyocr` (domyślne PyPI), dawała na
+          # żywo niezgodność ABI ("operator torchvision::nms does not
+          # exist") i EasyOCR nie odczytywał wtedy ŻADNEJ strony —
+          # zmierzone na prawdziwym przebiegu verify-recipe-cost.yml.
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install easyocr
 
       - name: Install PaddleOCR (open source, CPU only)

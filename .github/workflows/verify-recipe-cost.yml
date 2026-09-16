@@ -26,20 +26,27 @@ jobs:
           # kluczem; następny commit włączy cache z powrotem, licząc na to,
           # że mniejszy i świeży wpis przywróci się normalnie.
 
-      - name: Install PyTorch (CPU-only wheel, not the default CUDA one)
+      - name: Install PyTorch + torchvision (CPU-only wheels, not the default CUDA ones)
         run: |
-          # easyocr ciągnie torch, a domyślne koło z PyPI to wariant z
-          # PEŁNYM zestawem bibliotek CUDA (cublas, cudnn, nccl, cusparse,
-          # nvjitlink, ...) — kilka gigabajtów, których runner GitHub
-          # Actions (CPU-only, bez GPU) nigdy nie użyje. To one, nie sam
-          # torch, odpowiadały za ~2,9 GB cache'u pip i wielominutowe
-          # (a bywało, że wielunastominutowe) instalacje/przywracanie —
-          # zmierzone na żywo: usunięcie cache'u nie pomogło, bo ten sam
-          # ciężar i tak trzeba było ściągnąć od nowa. Instalujemy torch
-          # z oficjalnego indeksu kół CPU-only PRZED resztą, żeby pip nie
-          # sięgnął po wariant z CUDA przy rozwiązywaniu zależności
-          # easyocr.
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # easyocr ciągnie torch i torchvision, a domyślne koła z PyPI to
+          # warianty z PEŁNYM zestawem bibliotek CUDA (cublas, cudnn, nccl,
+          # cusparse, nvjitlink, ...) — kilka gigabajtów, których runner
+          # GitHub Actions (CPU-only, bez GPU) nigdy nie użyje. To one, nie
+          # sam torch, odpowiadały za ~2,9 GB cache'u pip i wielominutowe
+          # instalacje/przywracanie.
+          #
+          # WAŻNE: torch i torchvision muszą być zainstalowane RAZEM z tego
+          # samego indeksu w jednym poleceniu. Gdy instalowaliśmy tylko
+          # torch stąd, a torchvision zostawialiśmy `pip install -r
+          # requirements.txt` (bo easyocr deklaruje `torchvision>=0.5` bez
+          # górnego ograniczenia) — pip doinstalowywał torchvision z
+          # DOMYŚLNEGO PyPI, czyli inny build niż nasz torch+cpu. Efekt
+          # zmierzony na żywo na prawdziwym przebiegu: KAŻDY odczyt
+          # precyzyjnym silnikiem padał na "operator torchvision::nms does
+          # not exist" (niezgodność ABI), więc scraper Biedronki czytał
+          # 103 obiecujące strony i nie zapisał ani jednej ceny — 0 z 0,
+          # w milczeniu (błąd łapany per-strona, patrz biedronka/scraper.py).
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
         run: pip install -r requirements.txt
