@@ -103,7 +103,7 @@ jobs:
       # to on jest wolny i sieciowo zależny — zawieszenie/timeout tutaj nie
       # powinno blokować szybkich, deterministycznych scraperów niżej.
       - name: Scrape Biedronka flyer promotions (OCR)
-        timeout-minutes: 30
+        timeout-minutes: 45
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

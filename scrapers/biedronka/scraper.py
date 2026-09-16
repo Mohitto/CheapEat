@@ -195,6 +195,16 @@ class BiedronkaScraper:
 
         # Faza 2 — odczyt. Tylko obiecujące strony i tylko silnikiem, który
         # widzi ceny (patrz leaflet_ocr.py: tesseract ich nie czyta).
+        #
+        # Zapis do bazy dzieje się co SAVE_EVERY_N_PAGES stron, NIE dopiero
+        # na końcu pętli. Przy stu kilku obiecujących stronach i ~25 s na
+        # dokładny odczyt jedna strona, cała faza 2 potrafi przekroczyć
+        # limit czasu kroku CI — a job zabity przez timeout dostaje
+        # SIGTERM/SIGKILL bez szansy na dobiegnięcie do `_save()` na końcu,
+        # więc bez tego WSZYSTKO odczytane do tego momentu ginęłoby razem
+        # z procesem. `_save()` jest idempotentny (get_or_create + upsert),
+        # więc wielokrotne wywołanie na rosnącym słowniku jest bezpieczne.
+        SAVE_EVERY_N_PAGES = 10
         to_read = promising[:MAX_PRECISE_PAGES]
         for idx, page in enumerate(to_read, start=1):
             flyer, i = page["flyer"], page["index"]
@@ -241,6 +251,9 @@ class BiedronkaScraper:
                           + (f" [przy zakupie {c['bundle_units']} szt.]"
                              if c["bundle_units"] > 1 else "")
                           + (" [na wagę]" if c["sold_loose"] else ""))
+
+            if idx % SAVE_EVERY_N_PAGES == 0 and found_per_ingredient:
+                self._save(found_per_ingredient)
 
         if DEBUG:
             priced = {key[0] for key in found_per_ingredient}
