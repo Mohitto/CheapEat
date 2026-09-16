@@ -195,8 +195,14 @@ class BiedronkaScraper:
 
         # Faza 2 — odczyt. Tylko obiecujące strony i tylko silnikiem, który
         # widzi ceny (patrz leaflet_ocr.py: tesseract ich nie czyta).
-        for page in promising[:MAX_PRECISE_PAGES]:
+        to_read = promising[:MAX_PRECISE_PAGES]
+        for idx, page in enumerate(to_read, start=1):
             flyer, i = page["flyer"], page["index"]
+            # Bez tego loga długi przebieg (EasyOCR ~25 s/stronę) nie
+            # zostawia w logu CI żadnego śladu aż do samego końca fazy 2 —
+            # nie da się odróżnić "wolno, ale idzie" od zawieszenia.
+            print(f"[Biedronka] Dokładny odczyt {idx}/{len(to_read)}: "
+                  f"{flyer['slug']} s.{i}...", flush=True)
             try:
                 tokens, page_width = ocr_page_precise(page["url"])
             except Exception as e:

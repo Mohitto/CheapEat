@@ -61,6 +61,16 @@ jobs:
       - name: Test flyer tile reading (no network)
         run: python test_flyer_ocr.py
 
+      - name: Cache EasyOCR model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.EasyOCR
+          key: easyocr-models-${{ hashFiles('scrapers/requirements.txt') }}
+          # Bez tego każdy przebieg ściąga wagi modelu OD ZERA z serwera
+          # EasyOCR (patrz EASYOCR_MODEL_TIMEOUT_S w flyer_ocr.py) — to
+          # jedyny cel tego pobrania, więc klucz trzyma się wersji
+          # easyocr, nie samego commita.
+
       - name: Purge bad/stale price rows
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -75,13 +85,43 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: python seed_dev_data.py
 
-      - name: Re-run all scrapers with unit-aware packages
+      # Rozbite na trzy kroki zamiast jednego "python run_all.py" —
+      # wcześniej wszystko znikało w jednej, nieprzezroczystej fazie i przy
+      # zawieszeniu (np. bez limitu pobierania modelu EasyOCR — patrz
+      # EASYOCR_MODEL_TIMEOUT_S w flyer_ocr.py) nie dało się z zewnątrz
+      # odróżnić "wolno, ale idzie" od "wisi". Teraz każdy sklep ma własny
+      # log i własny limit czasu, więc zawieszenie jednego jest widoczne
+      # i szybko kończy się błędem zamiast zjadać cały (domyślnie
+      # 6-godzinny) limit joba. `continue-on-error` na OCR-owym kroku, bo
+      # to on jest wolny i sieciowo zależny — zawieszenie/timeout tutaj nie
+      # powinno blokować szybkich, deterministycznych scraperów niżej.
+      - name: Scrape Biedronka flyer promotions (OCR)
+        timeout-minutes: 30
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SCRAPER_DEBUG: '1'
           PYTHONUNBUFFERED: '1'
-        run: python run_all.py
+        run: python -m biedronka.scraper
+
+      - name: Scrape Biedronka regular shop prices
+        timeout-minutes: 10
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python -m biedronka.shop_scraper
+
+      - name: Scrape Lidl prices
+        timeout-minutes: 10
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python -m lidl.scraper
 
       - name: Compute recipe cost from real Supabase data
         env:

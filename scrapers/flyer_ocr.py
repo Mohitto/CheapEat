@@ -64,8 +64,10 @@ definicji, nie z braku pomysłu.
 """
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 
 import requests
 from PIL import Image
@@ -189,14 +191,48 @@ EASYOCR_UPSCALE = 2
 EASYOCR_MIN_CONFIDENCE = 0.3
 _easyocr_reader = None
 
+# EasyOCR ściąga wagi modelu przy pierwszym użyciu w procesie zwykłym
+# pobraniem sieciowym (bez wbudowanego limitu czasu), a z verbose=False
+# nie wypisuje o tym ani słowa — ten sam rodzaj problemu, jaki zmierzyliśmy
+# wcześniej przy PaddleOCR (probe_ocr_engines.py: pobieranie modeli z
+# bos.bcebos.com potrafiło wisieć 15+ minut bez żadnego śladu w logach).
+# Budżet zamienia cichy, bezterminowy hang w szybki, głośny błąd, zamiast
+# pozwolić mu pochłonąć cały (domyślnie 6-godzinny) limit joba CI.
+EASYOCR_MODEL_TIMEOUT_S = int(os.environ.get("EASYOCR_MODEL_TIMEOUT_S", "180"))
+
+
+class EasyOcrModelTimeout(Exception):
+    pass
+
+
+def _raise_easyocr_timeout(signum, frame):
+    raise EasyOcrModelTimeout(
+        f"Pobieranie/budowa modelu EasyOCR nie zmieściły się w "
+        f"{EASYOCR_MODEL_TIMEOUT_S}s — prawdopodobnie serwer modeli EasyOCR "
+        f"jest dziś wolny/nieosiągalny, nie błąd w naszym kodzie."
+    )
+
 
 def _reader():
     """Model EasyOCR wczytywany raz na proces — jego budowa trwa dłużej
-    niż odczyt pojedynczej strony."""
+    niż odczyt pojedynczej strony. Ograniczone czasowo (patrz
+    EASYOCR_MODEL_TIMEOUT_S wyżej) i z widocznym komunikatem, żeby log
+    CI nie milczał przez cały czas pobierania."""
     global _easyocr_reader
     if _easyocr_reader is None:
         import easyocr
-        _easyocr_reader = easyocr.Reader(["pl"], gpu=False, verbose=False)
+        print("[flyer_ocr] Ładuję model EasyOCR (pierwsze użycie w tym "
+              "procesie, może pobierać wagi z sieci)...", flush=True)
+        started = time.monotonic()
+        old_handler = signal.signal(signal.SIGALRM, _raise_easyocr_timeout)
+        signal.alarm(EASYOCR_MODEL_TIMEOUT_S)
+        try:
+            _easyocr_reader = easyocr.Reader(["pl"], gpu=False, verbose=False)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+        print(f"[flyer_ocr] Model EasyOCR gotowy ({time.monotonic() - started:.1f}s)",
+              flush=True)
     return _easyocr_reader
 
 
