@@ -2,6 +2,19 @@ name: Verify Recipe Cost
 
 on:
   workflow_dispatch:
+  schedule:
+    # Codziennie o 6:00 czasu polskiego, żeby ceny w bazie były świeże,
+    # zanim ktokolwiek otworzy apkę rano. Apka (i skrypty verify/diagnose)
+    # ZAWSZE czytają z Supabase — nigdy nie scrapują na żądanie w
+    # odpowiedzi na pytanie o cenę — więc to jedyne miejsce, które
+    # faktycznie odświeża dane.
+    #
+    # GitHub Actions liczy cron wyłącznie w UTC i NIE przestawia się
+    # automatycznie z czasem letnim Polski: 4:00 UTC to 6:00 czasu
+    # polskiego latem (CEST, UTC+2 — obowiązuje teraz), a zimą (CET,
+    # UTC+1) wypadnie na 5:00. Różnica to najwyżej godzina dwa razy w
+    # roku, więc zostaje bez ręcznej korekty.
+    - cron: '0 4 * * *'
 
 jobs:
   verify:
@@ -17,14 +30,129 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: scrapers/requirements.txt
+          # BEZ cache: 'pip' — jednorazowo. Poprzedni klucz cache'u wskazuje
+          # dalej na STARY, ~2,9 GB blob (sprzed przejścia na koło CPU-only
+          # niżej) i jego przywracanie wisiało >20 minut, mimo że sam zapis
+          # tego typu ilości danych wcześniej trwał sekundy — więc to nie
+          # (tylko) rozmiar, ale i coś w samej usłudze cache dziś. Ten
+          # przebieg zapisze NOWY, dużo mniejszy cache pod tym samym
+          # kluczem; następny commit włączy cache z powrotem, licząc na to,
+          # że mniejszy i świeży wpis przywróci się normalnie.
+
+      - name: Install PyTorch + torchvision (CPU-only wheels, not the default CUDA ones)
+        run: |
+          # easyocr ciągnie torch i torchvision, a domyślne koła z PyPI to
+          # warianty z PEŁNYM zestawem bibliotek CUDA (cublas, cudnn, nccl,
+          # cusparse, nvjitlink, ...) — kilka gigabajtów, których runner
+          # GitHub Actions (CPU-only, bez GPU) nigdy nie użyje. To one, nie
+          # sam torch, odpowiadały za ~2,9 GB cache'u pip i wielominutowe
+          # instalacje/przywracanie.
+          #
+          # WAŻNE: torch i torchvision muszą być zainstalowane RAZEM z tego
+          # samego indeksu w jednym poleceniu. Gdy instalowaliśmy tylko
+          # torch stąd, a torchvision zostawialiśmy `pip install -r
+          # requirements.txt` (bo easyocr deklaruje `torchvision>=0.5` bez
+          # górnego ograniczenia) — pip doinstalowywał torchvision z
+          # DOMYŚLNEGO PyPI, czyli inny build niż nasz torch+cpu. Efekt
+          # zmierzony na żywo na prawdziwym przebiegu: KAŻDY odczyt
+          # precyzyjnym silnikiem padał na "operator torchvision::nms does
+          # not exist" (niezgodność ABI), więc scraper Biedronki czytał
+          # 103 obiecujące strony i nie zapisał ani jednej ceny — 0 z 0,
+          # w milczeniu (błąd łapany per-strona, patrz biedronka/scraper.py).
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install Tesseract OCR (pol)
+        run: |
+          # Obrazy runnerów mają doklejone repozytoria firm trzecich (Chrome),
+          # które potrafią serwować nieaktualny indeks i wywalić apt-get update
+          # na niezgodności sumy kontrolnej — co nie ma nic wspólnego z
+          # pakietami, których potrzebujemy. Nie zależymy od nich, więc precz
+          # (nazwa pliku bywa różna: .list albo .sources, stąd szukanie treści).
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          # Nieudane odświeżenie indeksów nie może blokować instalacji —
+          # tesseract jest w głównym archiwum Ubuntu. Jeśli mimo to nie da się
+          # go zainstalować, padnie następna komenda i zobaczymy to wprost.
+          sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Test flyer tile reading (no network)
+        run: python test_flyer_ocr.py
+
+      - name: Cache EasyOCR model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.EasyOCR
+          key: easyocr-models-${{ hashFiles('scrapers/requirements.txt') }}
+          # Bez tego każdy przebieg ściąga wagi modelu OD ZERA z serwera
+          # EasyOCR (patrz EASYOCR_MODEL_TIMEOUT_S w flyer_ocr.py) — to
+          # jedyny cel tego pobrania, więc klucz trzyma się wersji
+          # easyocr, nie samego commita.
+
+      - name: Purge bad/stale price rows
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python cleanup_bad_mappings.py
+
+      - name: Re-seed test recipes (egg units in pieces)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python seed_dev_data.py
+
+      # Rozbite na trzy kroki zamiast jednego "python run_all.py" —
+      # wcześniej wszystko znikało w jednej, nieprzezroczystej fazie i przy
+      # zawieszeniu (np. bez limitu pobierania modelu EasyOCR — patrz
+      # EASYOCR_MODEL_TIMEOUT_S w flyer_ocr.py) nie dało się z zewnątrz
+      # odróżnić "wolno, ale idzie" od "wisi". Teraz każdy sklep ma własny
+      # log i własny limit czasu, więc zawieszenie jednego jest widoczne
+      # i szybko kończy się błędem zamiast zjadać cały (domyślnie
+      # 6-godzinny) limit joba. `continue-on-error` na OCR-owym kroku, bo
+      # to on jest wolny i sieciowo zależny — zawieszenie/timeout tutaj nie
+      # powinno blokować szybkich, deterministycznych scraperów niżej.
+      - name: Scrape Biedronka flyer promotions (OCR)
+        timeout-minutes: 45
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python -m biedronka.scraper
+
+      - name: Scrape Biedronka regular shop prices
+        timeout-minutes: 10
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python -m biedronka.shop_scraper
+
+      - name: Scrape Lidl prices
+        timeout-minutes: 10
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SCRAPER_DEBUG: '1'
+          PYTHONUNBUFFERED: '1'
+        run: python -m lidl.scraper
 
       - name: Compute recipe cost from real Supabase data
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
         run: python verify_recipe_cost.py
+
+      - name: Dump full price/mapping state per ingredient
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: '1'
+        run: python diagnose_prices.py

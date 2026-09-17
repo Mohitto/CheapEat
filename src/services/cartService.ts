@@ -11,6 +11,7 @@ import database from '../model/database';
 import { getRecipeIngredients, IGNORED_IN_COST } from './recipeService';
 import { getMappingsByIngredient } from './mappingService';
 import { getCurrentPrice } from './priceService';
+import { packagesNeeded } from './ingredientService';
 
 // ---------------------------------------------------------------------------
 // Typy
@@ -88,15 +89,6 @@ function mergeIngredientNeeds(
   return merged;
 }
 
-/**
- * Oblicza ile opakowań (packagesNeeded) trzeba kupić,
- * żeby pokryć zapotrzebowanie.
- */
-function packagesNeeded(neededGrams: number, unitAmount: number): number {
-  if (unitAmount <= 0) return 1;
-  return Math.ceil(neededGrams / unitAmount);
-}
-
 // ---------------------------------------------------------------------------
 // Główny algorytm
 // ---------------------------------------------------------------------------
@@ -154,9 +146,7 @@ export async function buildCartForRecipes(
     const options: CartProductOption[] = [];
 
     for (const mapping of mappings) {
-      const storeProductId    = (mapping as any).storeProductId as string;
-      const conversionFactor  = (mapping as any).conversionFactor as number ?? 1.0;
-      const unitAmount        = conversionFactor * 100; // gramatura opakowania
+      const storeProductId = (mapping as any).storeProductId as string;
 
       const pricePerUnit = await getCurrentPrice(storeProductId);
       if (pricePerUnit === null) continue;
@@ -165,16 +155,24 @@ export async function buildCartForRecipes(
       let productName = storeProductId;
       let storeId     = '';
       let storeName   = '';
+      let unitAmount  = 0;
       try {
         const prod = await database.get('store_products').find(storeProductId);
         productName = (prod as any).name ?? storeProductId;
         storeId     = (prod as any).storeId as string;
+        unitAmount  = ((prod as any).unitAmount as number) ?? 0;
+        // Opakowanie w innej jednostce niż przepis (np. gramy vs sztuki)
+        // nie da się porównać bez zgadywania — pomijamy tę opcję.
+        if ((prod as any).unit !== need.unit) continue;
 
         const store = await database.get('stores').find(storeId);
         storeName = (store as any).name ?? storeId;
-      } catch {}
+      } catch {
+        continue;
+      }
+      if (unitAmount <= 0) continue;
 
-      const pricePerGram  = unitAmount > 0 ? pricePerUnit / unitAmount : pricePerUnit;
+      const pricePerGram  = pricePerUnit / unitAmount;
       const pkgs          = packagesNeeded(need.amount, unitAmount);
       const totalCostPln  = Math.round(pkgs * pricePerUnit * 100) / 100;
 

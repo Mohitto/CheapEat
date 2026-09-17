@@ -1,11 +1,30 @@
-name: Probe Biedronka Network
+# Sonda diagnostyczna do gazetki Biedronki.
+#
+# Wcześniej uruchamiała probe_biedronka_network.py — jednorazowe
+# nasłuchiwanie ruchu sieciowego, którym znaleźliśmy leaflet-api. To
+# pytanie jest zamknięte (odpowiedź siedzi w docstringu
+# biedronka/scraper.py), a otwarte jest inne: dlaczego konkretna
+# promocja z konkretnej strony nie trafia do bazy. Przy 96-stronicowej
+# gazetce scraper nie może wypisać wszystkiego, więc od tego jest ten
+# przebieg. Sam probe_biedronka_network.py zostaje w repozytorium.
+name: Probe Biedronka Flyer Page
 
 on:
   workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Fragment slugu gazetki (np. codziennie)'
+        required: false
+        default: 'codziennie'
+      page:
+        description: 'Numer strony, licząc od 0'
+        required: false
+        default: '0'
 
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: scrapers
@@ -17,11 +36,49 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scrapers/requirements.txt
 
       - name: Install dependencies
-        run: |
-          pip install playwright requests
-          playwright install --with-deps chromium
+        run: pip install -r requirements.txt
 
-      - name: Probe Biedronka network traffic
-        run: python probe_biedronka_network.py
+      - name: Does this flyer exist as a real PDF, before OCR-ing anything
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_flyer_pdf.py "${{ inputs.slug || 'codziennie' }}"
+
+      - name: Install Tesseract OCR (pol)
+        run: |
+          sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null | sudo xargs -r rm -f
+          sudo apt-get update -qq || echo "apt-get update zgłosił błędy, kontynuuję na istniejących indeksach"
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-pol
+
+      - name: Install EasyOCR (open source, CPU only)
+        run: |
+          # Domyślne koła z PyPI ciągną pełny zestaw bibliotek CUDA (kilka
+          # GB), zbędny na tym CPU-only runnerze — patrz verify-recipe-cost.yml.
+          # torch I torchvision muszą iść RAZEM z tego samego indeksu w
+          # jednym poleceniu: instalacja samego torch stąd, a torchvision
+          # przez zwykłe `pip install easyocr` (domyślne PyPI), dawała na
+          # żywo niezgodność ABI ("operator torchvision::nms does not
+          # exist") i EasyOCR nie odczytywał wtedy ŻADNEJ strony —
+          # zmierzone na prawdziwym przebiegu verify-recipe-cost.yml.
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr
+
+      - name: Install PaddleOCR (open source, CPU only)
+        run: |
+          pip install "paddlepaddle==2.6.2" "paddleocr==2.7.3"
+          # paddleocr ciągnie pandas>=3, które wymusza numpy 2.x — a
+          # skompilowane koła EasyOCR (opencv-python) i samego PaddleOCR
+          # (opencv-contrib-python) mają zaszyte ABI numpy 1.x. Efekt bez
+          # tej linii: OBA silniki padają przy imporcie ("module compiled
+          # against ABI version 0x1000009 but this version of numpy is
+          # 0x2000000"), zmierzone na żywo w tym samym przebiegu.
+          pip install "numpy<2"
+
+      - name: Can any free OCR engine read the prices
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python probe_ocr_engines.py "${{ inputs.slug || 'codziennie' }}" "${{ inputs.page || '0' }}"
+
