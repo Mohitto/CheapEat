@@ -53,6 +53,11 @@ INGREDIENTS = [
     ("ser żółty", 25.0, 350),
     ("olej rzepakowy", 0.0, 884),
     ("sól", 0.0, 0),
+    ("wieprzowina schab", 21.5, 143),
+    ("ziemniaki", 2.0, 77),
+    ("ogórek", 0.7, 15),
+    ("bułka tarta", 10.0, 395),
+    ("śmietana", 2.5, 194),
 ]
 
 RECIPES = [
@@ -93,6 +98,23 @@ RECIPES = [
             ("ser żółty", 60, "g"),
             ("masło", 15, "g"),
             ("sól", 2, "g"),
+        ],
+    },
+    {
+        "title": "[TEST] Schabowe z ziemniakami i mizerią",
+        "portions": 4,
+        "prep_minutes": 40,
+        "ingredients": [
+            ("wieprzowina schab", 600, "g"),
+            ("jajka", 1, "szt"),        # do panierki
+            ("bułka tarta", 100, "g"),  # panierka
+            ("mąka pszenna", 40, "g"),  # panierka
+            ("olej rzepakowy", 60, "g"),# smażenie
+            ("ziemniaki", 1000, "g"),
+            ("masło", 20, "g"),         # do ziemniaków
+            ("ogórek", 400, "g"),       # mizeria
+            ("śmietana", 150, "g"),     # mizeria
+            ("sól", 5, "g"),
         ],
     },
 ]

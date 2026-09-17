@@ -6,11 +6,13 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import {
-  getRecipeById, calculateRecipeCost,
+  getRecipeById, calculateRecipeCost, calculateStorePriceComparison,
   type RecipeCostResult, type ShoppingPlan, type IngredientCostLine,
+  type StorePriceComparison,
 } from '../services/recipeService';
 import { buildCartForRecipes } from '../services/cartService';
 import { Recipe } from '../model/Recipe';
+import { StorePriceComparisonTable } from '../components/StorePriceComparisonTable';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RecipeDetail'>;
 
@@ -40,18 +42,21 @@ export function RecipeDetailScreen({ route }: Props) {
   const { recipeId } = route.params;
   const [recipe, setRecipe]   = useState<Recipe | null>(null);
   const [cost, setCost]       = useState<RecipeCostResult | null>(null);
+  const [storeComparison, setStoreComparison] = useState<StorePriceComparison[]>([]);
   const [plan, setPlan]       = useState<ShoppingPlan['kind']>('cheapest-basket');
   const [loading, setLoading] = useState(true);
   const [addingToCart, setAddingToCart] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const [r, c] = await Promise.all([
+      const [r, c, sc] = await Promise.all([
         getRecipeById(recipeId),
         calculateRecipeCost(recipeId),
+        calculateStorePriceComparison(recipeId),
       ]);
       setRecipe(r);
       setCost(c);
+      setStoreComparison(sc);
       setLoading(false);
     })();
   }, [recipeId]);
@@ -134,6 +139,8 @@ export function RecipeDetailScreen({ route }: Props) {
           Objazd dwóch sklepów oszczędza {cost.multiStoreSavingsPln.toFixed(2)} zł.
         </Text>
       )}
+
+      <StorePriceComparisonTable comparisons={storeComparison} />
 
       {shown && (
         <View style={s.costBox}>

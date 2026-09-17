@@ -241,7 +241,18 @@ class BiedronkaScraper:
                 # do przepisu na 30 g masła nikt nie kupi pięciu
                 # kostek. Oba warianty trafiają do bazy obok siebie i
                 # to apka wybiera tańszy dla konkretnej ilości.
-                key = (c["ingredient_name"], c["bundle_units"], c["sold_loose"])
+                #
+                # GRAMATURA jest częścią klucza z tego samego powodu: jajka
+                # 9 szt. i jajka 30 szt. to dwa różne, realne opakowania na
+                # tej samej stronie, oba bundle_units=1 — bez rozróżnienia
+                # po wielkości klucz kluczował je razem i zostawał tylko
+                # tańszy PER SZTUKĘ wariant (30 szt.), a 9-sztukowe
+                # opakowanie, praktyczne dla przepisu potrzebującego ~10
+                # jajek, znikało z bazy całkowicie. Zaokrąglenie tylko
+                # przeciw szumowi OCR na ostatniej cyfrze, nie po to, by
+                # zlewać naprawdę różne gramatury.
+                key = (c["ingredient_name"], c["bundle_units"], c["sold_loose"],
+                       round(c["unit_amount"], 0))
                 previous = found_per_ingredient.get(key)
                 if previous is None or c["unit_price"] < previous["unit_price"]:
                     found_per_ingredient[key] = {**c, "flyer": flyer}

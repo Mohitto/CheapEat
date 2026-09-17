@@ -29,6 +29,11 @@ INGREDIENT_KEYWORDS: dict[str, list[str]] = {
     "sól": ["sól"],
     "mleko": ["mleko"],
     "jajka": ["jajka", "jajko", "jaja", "jajek", "jajami"],
+    "wieprzowina schab": ["schab"],
+    "ziemniaki": ["ziemniaki", "ziemniak"],
+    "ogórek": ["ogórek", "ogórki"],
+    "bułka tarta": ["bułka tarta", "bułeczka tarta"],
+    "śmietana": ["śmietana"],
 }
 
 # Skanowanie 1000+ realnych produktów sklepowych (zakupy.biedronka.pl,
@@ -51,6 +56,19 @@ INGREDIENT_EXCLUDE_KEYWORDS: dict[str, list[str]] = {
     "jajka": ["sałatka", "sałatką"],
     "pomidor": ["pasztet", "sos", "koncentrat", "pesto", "sok", "pulpa"],
     "ryż": ["chleb", "wafle", "wafel"],
+    # "schab" jest też rdzeniem przymiotnika "schabowy" — gotowy,
+    # panierowany kotlet mrożony to zupełnie inny produkt (i inna cena)
+    # niż surowe mięso, a przepis na schabowe potrzebuje surowca.
+    "wieprzowina schab": ["schabowy", "schabowe", "schabowych"],
+    # Przetworzone produkty ziemniaczane (frytki, puree w proszku, chipsy)
+    # mają inną cenę jednostkową niż surowe ziemniaki i inne zastosowanie.
+    "ziemniaki": ["frytki", "puree", "chipsy", "płatki ziemniaczane"],
+    # Mizeria potrzebuje ŚWIEŻEGO ogórka — kiszony/konserwowy w słoiku to
+    # inny produkt o innej cenie za 100 g.
+    "ogórek": ["kiszon", "konserwow", "korniszon"],
+    # "Śmietanka do kawy" to małe kapsułki UHT o zupełnie innej cenie
+    # jednostkowej niż śmietana kremówka/18% do gotowania.
+    "śmietana": ["do kawy"],
 }
 
 # Domyślne wartości odżywcze dla kategorii, których może jeszcze nie być
@@ -59,6 +77,11 @@ INGREDIENT_EXCLUDE_KEYWORDS: dict[str, list[str]] = {
 INGREDIENT_DEFAULTS: dict[str, dict] = {
     "mięso mielone": {"protein_per_100g": 17.0, "kcal_per_100g": 254},
     "jajka": {"protein_per_100g": 12.5, "kcal_per_100g": 143},
+    "wieprzowina schab": {"protein_per_100g": 21.5, "kcal_per_100g": 143},
+    "ziemniaki": {"protein_per_100g": 2.0, "kcal_per_100g": 77},
+    "ogórek": {"protein_per_100g": 0.7, "kcal_per_100g": 15},
+    "bułka tarta": {"protein_per_100g": 10.0, "kcal_per_100g": 395},
+    "śmietana": {"protein_per_100g": 2.5, "kcal_per_100g": 194},
 }
 
 # Jednostka, w której NAPRAWDĘ kupuje się dany składnik. Domyślnie waga
@@ -111,6 +134,11 @@ PLAUSIBLE_UNIT_PRICE: dict[str, tuple[float, float]] = {
     # za 1 sztukę, nie za 100 g — realne ceny w sklepie to 1,35-1,60 zł/szt,
     # w promocji potrafi zejść poniżej złotówki.
     "jajka": (0.2, 3.0),
+    "wieprzowina schab": (0.6, 5.0),
+    "ziemniaki": (0.03, 0.6),
+    "ogórek": (0.05, 1.2),
+    "bułka tarta": (0.15, 2.0),
+    "śmietana": (0.2, 2.0),
 }
 
 

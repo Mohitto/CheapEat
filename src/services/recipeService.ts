@@ -268,6 +268,24 @@ const cheapest = (offers: IngredientOffer[]): IngredientOffer | null =>
     null
   );
 
+/**
+ * Opcja o NAJMNIEJSZYM opakowaniu — ile zapłacisz, kupując dokładnie tyle,
+ * ile trzeba, bez dokupowania zapasu dla okazji.
+ *
+ * Różni się od `cheapest()`: promocja wielosztukowa (np. jajka 30 szt. w
+ * cenie 0,73 zł/szt zamiast kartonu 9 szt. po 1,60 zł/szt) często wygrywa
+ * na SUMIE, mimo że przepis potrzebuje tylko ~10 sztuk — reszta się
+ * marnuje albo zostaje w lodówce. Ta funkcja pyta o inną rzecz: "ile
+ * kosztuje najmniejsza realna paczka tego składnika", niezależnie od
+ * tego, czy większe opakowanie wypada taniej per sztuka.
+ */
+const smallestPackage = (offers: IngredientOffer[]): IngredientOffer | null =>
+  offers.reduce<IngredientOffer | null>((best, o) => {
+    if (best === null) return o;
+    if (o.unitAmount !== best.unitAmount) return o.unitAmount < best.unitAmount ? o : best;
+    return o.costPln < best.costPln ? o : best;
+  }, null);
+
 function buildPlan(
   kind: ShoppingPlan['kind'],
   rows: IngredientRow[],
@@ -371,6 +389,52 @@ export async function calculateRecipeCost(
     lines: cheapestBasket.lines,
     missingPrices: cheapestBasket.missingPrices,
   };
+}
+
+/** Koszt tego przepisu w JEDNYM sklepie, licząc na dwa sposoby naraz. */
+export type StorePriceComparison = {
+  storeName: string;
+  /** Kupujesz dokładnie tyle, ile trzeba — bez zapasu dla promocji. */
+  smallestPackage: ShoppingPlan;
+  /** Najniższa suma, nawet jeśli wymaga kupna większego opakowania/wielosztuki. */
+  bestValue: ShoppingPlan;
+};
+
+/**
+ * Porównanie sklep-po-sklepie z DWIEMA kolumnami cenowymi każdy —
+ * odpowiedź na "ile zapłacę w Biedronce/Lidlu, kupując pojedyncze,
+ * najmniejsze opakowania" kontra "ile zapłacę, biorąc największą korzyść
+ * z promocji wielosztukowych, nawet kosztem nadmiaru".
+ *
+ * Osobna funkcja od `calculateRecipeCost`, bo tamta miesza sklepy
+ * (`cheapestBasket`) i pyta o zupełnie inne pytanie (najtaniej w ogóle vs
+ * najtaniej w jednym konkretnym sklepie, obiema strategiami).
+ */
+export async function calculateStorePriceComparison(
+  recipeId: string
+): Promise<StorePriceComparison[]> {
+  const recipe = await getRecipeById(recipeId);
+  if (!recipe) return [];
+
+  const rows = await collectOffers(recipeId);
+  const portions = recipe.portions ?? 1;
+
+  const storeNameById = new Map<string, string>();
+  for (const row of rows) {
+    for (const offer of row.offers) storeNameById.set(offer.storeId, offer.storeName);
+  }
+
+  const comparisons = [...storeNameById.entries()].map(([storeId, storeName]) => {
+    const forStore = (row: IngredientRow) => row.offers.filter(o => o.storeId === storeId);
+    return {
+      storeName,
+      smallestPackage: buildPlan('single-store', rows, row => smallestPackage(forStore(row)), portions),
+      bestValue: buildPlan('single-store', rows, row => cheapest(forStore(row)), portions),
+    };
+  });
+
+  comparisons.sort((a, b) => a.storeName.localeCompare(b.storeName));
+  return comparisons;
 }
 
 // ---------------------------------------------------------------------------
