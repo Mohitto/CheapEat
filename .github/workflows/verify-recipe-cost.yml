@@ -2,6 +2,19 @@ name: Verify Recipe Cost
 
 on:
   workflow_dispatch:
+  schedule:
+    # Codziennie o 6:00 czasu polskiego, żeby ceny w bazie były świeże,
+    # zanim ktokolwiek otworzy apkę rano. Apka (i skrypty verify/diagnose)
+    # ZAWSZE czytają z Supabase — nigdy nie scrapują na żądanie w
+    # odpowiedzi na pytanie o cenę — więc to jedyne miejsce, które
+    # faktycznie odświeża dane.
+    #
+    # GitHub Actions liczy cron wyłącznie w UTC i NIE przestawia się
+    # automatycznie z czasem letnim Polski: 4:00 UTC to 6:00 czasu
+    # polskiego latem (CEST, UTC+2 — obowiązuje teraz), a zimą (CET,
+    # UTC+1) wypadnie na 5:00. Różnica to najwyżej godzina dwa razy w
+    # roku, więc zostaje bez ręcznej korekty.
+    - cron: '0 4 * * *'
 
 jobs:
   verify:
