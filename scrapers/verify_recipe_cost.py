@@ -173,6 +173,17 @@ def cheapest(offers):
     return min(offers, key=lambda o: o["cost"]) if offers else None
 
 
+def smallest_package(offers):
+    """Najmniejsze dostępne opakowanie — mirror smallestPackage() z
+    recipeService.ts. Odpowiada na "ile zapłacę, kupując dokładnie tyle,
+    ile trzeba", w przeciwieństwie do cheapest(), które może wybrać duże
+    opakowanie/promocję wielosztukową tylko dlatego, że suma wychodzi
+    niżej mimo nadmiaru."""
+    if not offers:
+        return None
+    return min(offers, key=lambda o: (o["unit_amount"], o["cost"]))
+
+
 def print_plan(title: str, plan: dict) -> None:
     print(f"\n  {title}: ", end="")
     if plan["total"] is None:
@@ -237,8 +248,37 @@ def calculate_recipe_cost(recipe_title_like: str) -> None:
             if saved > 0:
                 print(f"\n  Objazd kilku sklepów oszczędza {saved:.2f} zł.")
 
+    print_store_price_comparison(rows, portions, store_ids)
+
+
+def print_store_price_comparison(rows: list[dict], portions: int, store_ids: set) -> None:
+    """Mirror calculateStorePriceComparison() z recipeService.ts: per
+    sklep, dwie kolumny — najmniejsze opakowanie kontra najlepsza cena
+    (nawet kosztem nadmiaru)."""
+    store_names = {}
+    for r in rows:
+        for o in r["offers"]:
+            store_names[o["store_id"]] = o["store_name"]
+
+    print("\n  --- Porównanie sklepów (pojedynczo vs wielosztuka) ---")
+    for sid in sorted(store_ids, key=lambda s: store_names.get(s, "")):
+        name = store_names.get(sid, sid)
+        small = build_plan(rows, lambda r, sid=sid: smallest_package([o for o in r["offers"] if o["store_id"] == sid]), portions)
+        best = build_plan(rows, lambda r, sid=sid: cheapest([o for o in r["offers"] if o["store_id"] == sid]), portions)
+        small_s = f"{small['total']:.2f} zł" if small["total"] is not None else "brak cen"
+        best_s = f"{best['total']:.2f} zł" if best["total"] is not None else "brak cen"
+        print(f"  {name:12s}  pojedynczo: {small_s:>12s}   wielosztuka: {best_s:>12s}")
+        for entry_small, entry_best in zip(small["lines"], best["lines"]):
+            row = entry_small["row"]
+            if row["ignored"]:
+                continue
+            os_, ob = entry_small["offer"], entry_best["offer"]
+            cs = f"{os_['cost']:.2f} zł ({os_['unit_amount']:g}{row['unit']})" if os_ else "—"
+            cb = f"{ob['cost']:.2f} zł ({ob['unit_amount']:g}{row['unit']})" if ob else "—"
+            print(f"      {row['name']:20s}  {cs:>22s}   {cb:>22s}")
+
 
 if __name__ == "__main__":
-    targets = sys.argv[1:] or ["Naleśniki", "Omlet"]
+    targets = sys.argv[1:] or ["Naleśniki", "Omlet", "Schabowe"]
     for t in targets:
         calculate_recipe_cost(t)
